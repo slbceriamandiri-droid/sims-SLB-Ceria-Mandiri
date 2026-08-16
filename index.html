@@ -215,6 +215,18 @@
             return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; 
         };
 
+        window.calculateAge = (birthDateString) => {
+            if (!birthDateString) return '-';
+            const today = new Date();
+            const birthDate = new Date(birthDateString);
+            let age = today.getFullYear() - birthDate.getFullYear();
+            const m = today.getMonth() - birthDate.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+                age--;
+            }
+            return age >= 0 ? `${age} thn` : '-';
+        };
+
         window.showToast = (msg, type = 'success') => {
             const toast = document.createElement('div');
             toast.className = `fixed bottom-4 right-4 text-white px-6 py-3 rounded-xl shadow-2xl z-[200] fade-in font-bold flex items-center ${type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`;
@@ -506,14 +518,12 @@
             const ed = window.state.editModalData;
 
             if (ed) {
-                // Mode Edit Spesifik
                 const desc = document.getElementById(`ps-desc-${ed.studentId}`)?.value || '';
                 const updatedData = { ...ed, date, materi, desc };
                 if (await window.saveToCloud('progsus', ed.id, updatedData, true)) {
                     window.showToast('Data Progsus berhasil diperbarui!');
                 }
             } else {
-                // Mode Tambah Massal (Checklist)
                 const checkboxes = document.querySelectorAll('.ps-checkbox:checked');
                 if(checkboxes.length === 0) return window.showToast('Pilih minimal satu siswa!', 'error');
 
@@ -731,15 +741,34 @@
             let record = window.localDb.penilaian.find(p => p?.teacherId === window.state.selectedTeacherId && p?.type === pTab && p?.month === month);
             let id = record ? record.id : window.generateId();
             
-            if (pTab === 'harian') {
-                const mapel = document.getElementById('penilaian-mapel')?.value || 'Mapel / Tema';
-                let aspects = record && record.aspects ? JSON.parse(record.aspects) : [];
-                if(!aspects.includes(mapel)) aspects.push(mapel);
+            if (['harian', 'sts', 'sas'].includes(pTab)) {
+                const mapelInput = document.getElementById('penilaian-mapel');
+                const mapel = mapelInput?.value.trim();
+                
+                if (!mapel) return window.showToast('Nama Mapel tidak boleh kosong!', 'error');
+
+                let aspects = [];
+                if (record && record.aspects && JSON.parse(record.aspects).length > 0) {
+                    aspects = JSON.parse(record.aspects);
+                } else {
+                    aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama'];
+                }
+                
+                if(!aspects.includes(mapel)) {
+                    aspects.push(mapel);
+                } else {
+                    return window.showToast(`Mapel '${mapel}' sudah ada di tabel.`, 'error');
+                }
                 
                 let data = record || { id, teacherId: window.state.selectedTeacherId, type: pTab, month: month, scores: '{}', status: 'Menunggu' };
                 data.aspects = JSON.stringify(aspects);
                 
-                if(await window.saveToCloud('penilaian', id, data)) { window.closeModal('add-penilaian-modal'); window.renderApp(); }
+                if(await window.saveToCloud('penilaian', id, data)) { 
+                    window.closeModal('add-penilaian-modal'); 
+                    mapelInput.value = ''; 
+                    window.showToast(`Kolom ${mapel} berhasil ditambahkan.`);
+                    window.renderApp(); 
+                }
             }
         };
 
@@ -817,20 +846,13 @@
             let aspects = JSON.parse(record.aspects || '[]');
             let scores = JSON.parse(record.scores || '{}');
 
-            // Hapus dari aspects
             aspects = aspects.filter(a => a !== mapelName);
             record.aspects = JSON.stringify(aspects);
 
-            // Bersihkan data nilai yang terkait mapel tersebut
             Object.keys(scores).forEach(studentId => {
-                // Untuk harian, hapus semua pertemuan
                 if (record.type === 'harian') {
-                    for(let i=1; i<=5; i++) {
-                        delete scores[studentId][`${mapelName}_p${i}`];
-                    }
-                } 
-                // Untuk sts/sas
-                else {
+                    for(let i=1; i<=5; i++) { delete scores[studentId][`${mapelName}_p${i}`]; }
+                } else {
                     delete scores[studentId][mapelName];
                 }
             });
@@ -853,19 +875,12 @@
             let aspects = JSON.parse(record.aspects || '[]');
             let scores = JSON.parse(record.scores || '{}');
 
-            // Cek duplikasi
-            if (aspects.includes(cleanNewName)) {
-                return window.showToast(`Nama '${cleanNewName}' sudah ada.`, 'error');
-            }
+            if (aspects.includes(cleanNewName)) return window.showToast(`Nama '${cleanNewName}' sudah ada.`, 'error');
 
-            // Update aspects array
             const idx = aspects.indexOf(oldMapelName);
-            if (idx !== -1) {
-                aspects[idx] = cleanNewName;
-            }
+            if (idx !== -1) aspects[idx] = cleanNewName;
             record.aspects = JSON.stringify(aspects);
 
-            // Migrasi data nilai lama ke key baru
             Object.keys(scores).forEach(studentId => {
                 if (record.type === 'harian') {
                     for(let i=1; i<=5; i++) {
@@ -955,31 +970,68 @@
                     content.innerHTML = `<h2 class="text-2xl font-black text-slate-800 mb-6">Manajemen Akun Guru</h2><div class="grid grid-cols-1 lg:grid-cols-3 gap-6"><div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-fit"><h3 class="font-bold text-slate-700 mb-4 border-b pb-2"><i class="fas fa-user-plus mr-2 text-indigo-500"></i> ${window.state.editModalData ? 'Edit Guru' : 'Tambah Guru'}</h3><form onsubmit="event.preventDefault(); window.saveToCloud('teachers', '${ed.id}', {id: '${ed.id}', name: document.getElementById('tg-name').value, role: document.getElementById('tg-role').value, username: document.getElementById('tg-user').value.toLowerCase().trim(), password: document.getElementById('tg-pass').value.trim()}).then((res)=>{if(res){window.state.editModalData=null; window.renderApp();}})" class="space-y-4"><div><label class="block text-xs font-bold text-slate-500 mb-1">Nama Lengkap</label><input type="text" id="tg-name" value="${ed.name||''}" required class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm outline-none focus:border-indigo-500"></div><div><label class="block text-xs font-bold text-slate-500 mb-1">Jabatan</label><select id="tg-role" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm outline-none focus:border-indigo-500"><option value="Guru Kelas" ${ed.role==='Guru Kelas'?'selected':''}>Guru Kelas</option><option value="Guru Stimulasi" ${ed.role==='Guru Stimulasi'?'selected':''}>Guru Stimulasi Khusus</option></select></div><div><label class="block text-xs font-bold text-slate-500 mb-1">Username Login</label><input type="text" id="tg-user" value="${ed.username||''}" required class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm outline-none focus:border-indigo-500"></div><div><label class="block text-xs font-bold text-slate-500 mb-1">Password</label><div class="relative"><input type="text" id="tg-pass" value="${ed.password||''}" required class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 pr-10 text-sm outline-none focus:border-indigo-500"><button type="button" onclick="window.togglePassword('tg-pass')" class="absolute right-3 top-2.5 text-slate-400"><i class="fas fa-eye" id="tg-pass-icon"></i></button></div></div><div class="flex gap-2"><button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-bold shadow-sm transition">Simpan</button>${window.state.editModalData ? `<button type="button" onclick="window.state.editModalData=null;window.renderApp()" class="px-4 bg-slate-200 hover:bg-slate-300 transition text-sm font-bold rounded-lg">Batal</button>` : ''}</div></form></div><div class="lg:col-span-2 space-y-3 max-h-[75vh] overflow-y-auto custom-scrollbar pr-2">${(window.localDb.teachers||[]).filter(t=>t?.role!=='Super Admin').map(t=>`<div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between"><div class="flex items-center gap-4"><div class="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-lg"><i class="fas fa-user-tie"></i></div><div><h4 class="font-bold text-slate-800">${t?.name||'-'}</h4><p class="text-xs text-slate-500">${t?.role||'-'} | User: ${t?.username||'-'}</p></div></div><div class="flex gap-2"><button onclick="window.openEditModal('teachers', '${t.id}')" class="w-8 h-8 rounded-full bg-indigo-50 hover:bg-indigo-600 hover:text-white transition text-indigo-600"><i class="fas fa-pen text-xs"></i></button><button onclick="window.deleteFileItem('teachers', '${t.id}', 'Guru')" class="w-8 h-8 rounded-full bg-rose-50 hover:bg-rose-500 hover:text-white transition text-rose-500"><i class="fas fa-trash text-xs"></i></button></div></div>`).join('')}</div></div>`;
                 }
                 else if (window.state.currentView === 'siswa') {
-                    const ed = window.state.editModalData || { id: window.generateId(), name: '', nis: '', condition: '', teacherId: '' };
+                    const ed = window.state.editModalData || { id: window.generateId(), name: '', nis: '', nisn: '', birthPlace: '', birthDate: '', condition: '', height: '', weight: '', headCircum: '', teacherId: '' };
                     content.innerHTML = `<h2 class="text-2xl font-black text-slate-800 mb-6">Data Siswa di Kelas</h2>
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         ${!isSuperAdmin || window.state.editModalData ? `
                         <div class="form-container bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-fit no-print">
-                            <h3 class="font-bold text-slate-700 mb-4 border-b pb-2"><i class="fas fa-user-plus mr-2 text-indigo-500"></i> ${window.state.editModalData ? 'Edit Siswa' : 'Tambah Siswa'}</h3>
-                            <form onsubmit="event.preventDefault(); window.saveToCloud('students', '${ed.id}', {id: '${ed.id}', name: document.getElementById('ts-name').value, nis: document.getElementById('ts-nis').value, condition: document.getElementById('ts-cond').value, teacherId: '${targetUid}'}).then(res=>{if(res){window.state.editModalData=null;window.renderApp();}})" class="space-y-3">
+                            <h3 class="font-bold text-slate-700 mb-4 border-b pb-2 flex items-center"><i class="fas fa-user-plus mr-2 text-indigo-600"></i> ${window.state.editModalData ? 'Edit Siswa' : 'Tambah Siswa'}</h3>
+                            <form onsubmit="event.preventDefault(); window.saveToCloud('students', '${ed.id}', {id: '${ed.id}', name: document.getElementById('ts-name').value, nis: document.getElementById('ts-nis').value, nisn: document.getElementById('ts-nisn').value, birthPlace: document.getElementById('ts-bplace').value, birthDate: document.getElementById('ts-bdate').value, condition: document.getElementById('ts-cond').value, height: document.getElementById('ts-height').value, weight: document.getElementById('ts-weight').value, headCircum: document.getElementById('ts-head').value, teacherId: '${targetUid}'}).then(res=>{if(res){window.state.editModalData=null;window.renderApp();}})" class="space-y-4">
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">Nama Lengkap</label><input type="text" id="ts-name" value="${ed.name||''}" required class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
-                                <div><label class="block text-xs font-bold text-slate-500 mb-1">NIS / NISN</label><input type="text" id="ts-nis" value="${ed.nis||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div><label class="block text-xs font-bold text-slate-500 mb-1">NIS</label><input type="text" id="ts-nis" value="${ed.nis||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
+                                    <div><label class="block text-xs font-bold text-slate-500 mb-1">NISN</label><input type="text" id="ts-nisn" value="${ed.nisn||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div><label class="block text-xs font-bold text-slate-500 mb-1">Tempat Lahir</label><input type="text" id="ts-bplace" value="${ed.birthPlace||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
+                                    <div><label class="block text-xs font-bold text-slate-500 mb-1">Tanggal Lahir</label><input type="date" id="ts-bdate" value="${ed.birthDate||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
+                                </div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">Kekhususan / Kondisi</label><input type="text" id="ts-cond" value="${ed.condition||''}" placeholder="Contoh: Tunagrahita" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"></div>
-                                <div class="flex gap-2 pt-2"><button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 transition text-white py-2.5 rounded-lg text-sm font-bold shadow-sm">Simpan Data</button>${window.state.editModalData ? `<button type="button" onclick="window.state.editModalData=null;window.renderApp()" class="px-4 bg-slate-200 hover:bg-slate-300 transition text-sm font-bold rounded-lg">Batal</button>` : ''}</div>
+                                
+                                <div class="pt-2 border-t border-slate-100">
+                                    <h4 class="text-xs font-bold text-indigo-600 mb-2 flex items-center"><i class="fas fa-heartbeat mr-1"></i> Catatan Fisik Bulanan</h4>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <div><label class="block text-[10px] font-bold text-slate-500 mb-1">Tinggi (cm)</label><input type="text" id="ts-height" value="${ed.height||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-indigo-500 text-center" placeholder="-"></div>
+                                        <div><label class="block text-[10px] font-bold text-slate-500 mb-1">Berat (kg)</label><input type="text" id="ts-weight" value="${ed.weight||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-indigo-500 text-center" placeholder="-"></div>
+                                        <div><label class="block text-[10px] font-bold text-slate-500 mb-1">L. Kepala (cm)</label><input type="text" id="ts-head" value="${ed.headCircum||''}" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-indigo-500 text-center" placeholder="-"></div>
+                                    </div>
+                                </div>
+
+                                <div class="flex gap-2 pt-2"><button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 transition text-white py-3 rounded-lg text-sm font-bold shadow-sm">Simpan Data</button>${window.state.editModalData ? `<button type="button" onclick="window.state.editModalData=null;window.renderApp()" class="px-4 bg-slate-200 hover:bg-slate-300 transition text-sm font-bold rounded-lg text-slate-700">Batal</button>` : ''}</div>
                             </form>
                         </div>` : ''}
-                        <div class="${isSuperAdmin && !window.state.editModalData ? 'lg:col-span-3' : 'lg:col-span-2'} grid grid-cols-1 md:grid-cols-2 gap-4 h-fit max-h-[75vh] overflow-y-auto custom-scrollbar pr-2">
+                        <div class="${isSuperAdmin && !window.state.editModalData ? 'lg:col-span-3' : 'lg:col-span-2'} grid grid-cols-1 md:grid-cols-2 gap-4 h-fit max-h-[75vh] overflow-y-auto custom-scrollbar pr-2 pb-12">
                             ${targetStudents.length === 0 ? `<div class="md:col-span-2 bg-white p-8 rounded-2xl text-center text-slate-400 border border-slate-100 shadow-sm"><i class="fas fa-users text-4xl mb-3 opacity-30"></i><p>Belum ada data siswa.</p></div>` : targetStudents.map(s => {
-                                return `<div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between space-y-3">
+                                return `<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-between space-y-4 transition hover:border-indigo-200 hover:shadow-md">
                                     <div class="flex gap-3 items-start">
-                                        <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold text-lg shrink-0">${(s?.name||'?').charAt(0)}</div>
-                                        <div class="flex-1"><h4 class="font-bold text-slate-800 text-sm">${s?.name||'-'}</h4><p class="text-[10px] text-indigo-600 font-bold uppercase mt-0.5">NIS: ${s?.nis||'-'}</p></div>
+                                        <div class="w-12 h-12 rounded-full bg-indigo-500 text-white flex items-center justify-center font-bold text-xl shrink-0 shadow-inner">${(s?.name||'?').charAt(0).toUpperCase()}</div>
+                                        <div class="flex-1">
+                                            <h4 class="font-bold text-slate-800 text-sm mb-0.5">${s?.name||'-'}</h4>
+                                            <p class="text-[10px] text-indigo-600 font-bold uppercase tracking-wider mb-0.5">NIS: ${s?.nis||'-'} | NISN: ${s?.nisn||'-'}</p>
+                                            <p class="text-[10px] text-slate-500 font-medium">TTL: ${s?.birthPlace||'-'}, ${s?.birthDate||'-'} <span class="font-bold text-indigo-500">(${window.calculateAge(s?.birthDate)})</span></p>
+                                        </div>
                                     </div>
-                                    <div class="action-buttons flex gap-2 justify-between items-center no-print border-t border-slate-100 pt-2 mt-auto">
-                                        <span class="text-[10px] font-bold text-slate-400 uppercase"><i class="fas fa-tag mr-1"></i> ${s?.condition||'Umum'}</span>
+                                    
+                                    <div class="bg-slate-50 border border-slate-100 rounded-xl p-2.5 grid grid-cols-3 gap-2 text-center">
+                                        <div class="flex flex-col justify-center">
+                                            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Tinggi</span>
+                                            <span class="text-xs font-bold text-slate-700">${s?.height ? s.height + ' cm' : '-'}</span>
+                                        </div>
+                                        <div class="flex flex-col justify-center border-l border-r border-slate-200">
+                                            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Berat</span>
+                                            <span class="text-xs font-bold text-slate-700">${s?.weight ? s.weight + ' kg' : '-'}</span>
+                                        </div>
+                                        <div class="flex flex-col justify-center">
+                                            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">L. Kepala</span>
+                                            <span class="text-xs font-bold text-slate-700">${s?.headCircum ? s.headCircum + ' cm' : '-'}</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="action-buttons flex gap-2 justify-between items-center no-print border-t border-slate-100 pt-3 mt-auto">
+                                        <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider"><i class="fas fa-tag mr-1 text-slate-300"></i> ${s?.condition||'Umum'}</span>
                                         ${!isSuperAdmin ? `<div class="flex gap-2">
-                                            <button onclick="window.openEditModal('students', '${s.id}')" class="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold text-xs transition"><i class="fas fa-pen mr-1"></i> Edit</button>
-                                            <button onclick="window.deleteFileItem('students', '${s.id}', 'Siswa')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-500 font-bold text-xs transition"><i class="fas fa-trash mr-1"></i> Hapus</button>
+                                            <button onclick="window.openEditModal('students', '${s.id}')" class="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold text-xs transition flex items-center"><i class="fas fa-pen mr-1.5"></i> Edit</button>
+                                            <button onclick="window.deleteFileItem('students', '${s.id}', 'Siswa')" class="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-500 font-bold text-xs transition flex items-center"><i class="fas fa-trash mr-1.5"></i> Hapus</button>
                                         </div>` : `<span class="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded font-bold"><i class="fas fa-lock mr-1"></i> Mode Lihat</span>`}
                                     </div>
                                 </div>`;
@@ -1410,7 +1462,6 @@
                     let aspects = record && record.aspects ? JSON.parse(record.aspects) : [];
                     let scores = record && record.scores ? JSON.parse(record.scores) : {};
                     
-                    // Inisialisasi default aspects jika kosong, berlaku untuk Harian, STS, SAS
                     if(['harian', 'sts', 'sas'].includes(pTab) && (!record || aspects.length === 0)) {
                         aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama'];
                     }
