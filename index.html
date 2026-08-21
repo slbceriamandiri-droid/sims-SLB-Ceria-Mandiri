@@ -824,11 +824,31 @@
 
         window.updateScore = async (recordId, studentId, aspectKey, value) => {
             let record = window.localDb.penilaian.find(p => p?.id === recordId);
-            if(!record) return;
+            
+            // Perbaikan: Jika data bulan ini belum ada di server, buat secara otomatis
+            if(!record) {
+                let pTab = window.state.penilaianTab;
+                let aspects = [];
+                if (['harian', 'sts', 'sas'].includes(pTab)) {
+                    aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama'];
+                }
+                record = {
+                    id: recordId,
+                    teacherId: window.state.selectedTeacherId || window.state.currentUser.id,
+                    type: pTab,
+                    month: window.state.penilaianMonth || window.getToday().substring(0,7),
+                    aspects: JSON.stringify(aspects),
+                    scores: '{}',
+                    status: 'Menunggu'
+                };
+            }
+            
             let scores = JSON.parse(record.scores || '{}');
             if(!scores[studentId]) scores[studentId] = {};
             scores[studentId][aspectKey] = value;
             record.scores = JSON.stringify(scores);
+            
+            // Simpan ke cloud di latar belakang (background = true)
             await window.saveToCloud('penilaian', recordId, record, true);
         };
         
@@ -891,7 +911,19 @@
             if(!confirm(`Yakin ingin menghapus kolom '${mapelName}' beserta semua nilainya?`)) return;
             
             let record = window.localDb.penilaian.find(p => p.id === recordId);
-            if(!record) return;
+            
+            // Perbaikan: Dukung penghapusan mapel default walau belum ada nilai diisi
+            if(!record) {
+                record = {
+                    id: recordId,
+                    teacherId: window.state.selectedTeacherId || window.state.currentUser.id,
+                    type: window.state.penilaianTab,
+                    month: window.state.penilaianMonth || window.getToday().substring(0,7),
+                    aspects: JSON.stringify(['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama']),
+                    scores: '{}',
+                    status: 'Menunggu'
+                };
+            }
 
             let aspects = JSON.parse(record.aspects || '[]');
             let scores = JSON.parse(record.scores || '{}');
@@ -924,7 +956,19 @@
 
             const cleanNewName = newName.trim();
             let record = window.localDb.penilaian.find(p => p.id === recordId);
-            if(!record) return;
+            
+            // Perbaikan: Dukung edit mapel default walau belum ada nilai diisi
+            if(!record) {
+                record = {
+                    id: recordId,
+                    teacherId: window.state.selectedTeacherId || window.state.currentUser.id,
+                    type: window.state.penilaianTab,
+                    month: window.state.penilaianMonth || window.getToday().substring(0,7),
+                    aspects: JSON.stringify(['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama']),
+                    scores: '{}',
+                    status: 'Menunggu'
+                };
+            }
 
             let aspects = JSON.parse(record.aspects || '[]');
             let scores = JSON.parse(record.scores || '{}');
