@@ -315,25 +315,41 @@
 
         // Export Utilities
         window.exportToCSV = (filename, rows) => {
-            let csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
-            let encodedUri = encodeURI(csvContent);
-            let link = document.createElement("a"); link.setAttribute("href", encodedUri); link.setAttribute("download", filename + ".csv");
-            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            try {
+                if (!rows || rows.length === 0) throw new Error("Data tidak tersedia untuk diekspor");
+                let csvContent = rows.map(e => e.map(cell => `"${(cell||'').toString().replace(/"/g, '""')}"`).join(",")).join("\n");
+                let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                let url = URL.createObjectURL(blob);
+                let link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename + ".csv");
+                document.body.appendChild(link); 
+                link.click(); 
+                document.body.removeChild(link);
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+            } catch (err) {
+                window.showToast("Gagal mengunduh: " + err.message, "error");
+            }
         };
 
         window.exportTableToCSV = (tableId, filename) => {
-            const table = document.getElementById(tableId); if(!table) return;
-            let rows = [];
-            for (let i = 0; i < table.rows.length; i++) {
-                let row = [], cols = table.rows[i].querySelectorAll("td, th");
-                for (let j = 0; j < cols.length; j++) {
-                    let input = cols[j].querySelector('input, select');
-                    if(input) row.push(`"${input.value.replace(/"/g, '""')}"`);
-                    else row.push(`"${cols[j].innerText.replace(/"/g, '""')}"`);
+            try {
+                const table = document.getElementById(tableId); 
+                if(!table) throw new Error("Tabel tidak ditemukan");
+                let rows = [];
+                for (let i = 0; i < table.rows.length; i++) {
+                    let row = [], cols = table.rows[i].querySelectorAll("td, th");
+                    for (let j = 0; j < cols.length; j++) {
+                        let input = cols[j].querySelector('input, select');
+                        if(input) row.push(input.value);
+                        else row.push(cols[j].innerText);
+                    }
+                    rows.push(row);
                 }
-                rows.push(row.join(","));
+                window.exportToCSV(filename, rows);
+            } catch (err) {
+                window.showToast("Gagal memproses tabel: " + err.message, "error");
             }
-            window.exportToCSV(filename, rows.map(r => r.split(',')));
         };
 
         window.exportProgsusToCSV = () => {
@@ -400,6 +416,12 @@
                 if (!clean.title && clean.notes) clean.title = clean.notes;
                 if (!clean.type && clean.category) clean.type = clean.category;
                 if (!clean.category && clean.type) clean.category = clean.type;
+                
+                // PERBAIKAN BUG 2: Proteksi strict null untuk studentId 
+                // untuk mencegah kegagalan constraint foreign key di Supabase
+                if (clean.studentId === undefined || clean.studentId === '') {
+                    clean.studentId = null;
+                }
             }
             
             if (table === 'materials' || table === 'berkasGuru') {
@@ -512,8 +534,8 @@
                         } else {
                             window.localDb[t.memory] = data || [];
                             if (t.memory === 'materials') {
-                                // Optimasi penggunaan memori dengan shallow copy
-                                window.localDb['berkasGuru'] = data ? [...data] : [];
+                                // Clone data array untuk entitas berkas_guru yang membagikan tabel yang sama
+                                window.localDb['berkasGuru'] = JSON.parse(JSON.stringify(data || []));
                             }
                         }
                     } catch (err) { 
@@ -1006,7 +1028,7 @@
 
             Object.keys(scores).forEach(studentId => {
                 if (record.type === 'bulanan') {
-                    for(let i=1; i<=5; i++) { delete scores[studentId][`${mapelName}_p${i}_P`]; delete scores[studentId][`${mapelName}_p${i}_K`]; }
+                    delete scores[studentId][`${mapelName}_P`]; delete scores[studentId][`${mapelName}_K`];
                 } else if (record.type === 'semesteran') { 
                     ['F', 'STS', 'SAS', 'Catatan'].forEach(suffix => delete scores[studentId][`${mapelName}_${suffix}`]);
                 }
@@ -1033,12 +1055,10 @@
 
             Object.keys(scores).forEach(studentId => {
                 if (record.type === 'bulanan') {
-                    for(let i=1; i<=5; i++) {
-                        let okP = `${oldMapelName}_p${i}_P`; let nkP = `${cleanNewName}_p${i}_P`;
-                        if(scores[studentId][okP] !== undefined) { scores[studentId][nkP] = scores[studentId][okP]; delete scores[studentId][okP]; }
-                        let okK = `${oldMapelName}_p${i}_K`; let nkK = `${cleanNewName}_p${i}_K`;
-                        if(scores[studentId][okK] !== undefined) { scores[studentId][nkK] = scores[studentId][okK]; delete scores[studentId][okK]; }
-                    }
+                    let okP = `${oldMapelName}_P`; let nkP = `${cleanNewName}_P`;
+                    if(scores[studentId][okP] !== undefined) { scores[studentId][nkP] = scores[studentId][okP]; delete scores[studentId][okP]; }
+                    let okK = `${oldMapelName}_K`; let nkK = `${cleanNewName}_K`;
+                    if(scores[studentId][okK] !== undefined) { scores[studentId][nkK] = scores[studentId][okK]; delete scores[studentId][okK]; }
                 } else if (record.type === 'semesteran') {
                     ['F', 'STS', 'SAS', 'Catatan'].forEach(suffix => {
                         let ok = `${oldMapelName}_${suffix}`; let nk = `${cleanNewName}_${suffix}`;
@@ -1052,7 +1072,7 @@
         };
 
         window.openAddFileModal = () => {
-            const col = window.state.currentView === 'dataGuru' ? (window.state.dataGuruTab || 'materials') : window.state.currentView;
+            const col = window.state.currentView === 'dataGuru' ? 'materials' : window.state.currentView;
             const titleLabel = document.querySelector('#ex-file-title-container label');
             const titleInput = document.getElementById('ex-file-title');
             const statusEl = document.getElementById('upload-progress-status');
@@ -1060,19 +1080,13 @@
             document.getElementById('ex-file-id').value = ''; titleInput.value = ''; document.getElementById('ex-file-input').value = '';
             if(statusEl) statusEl.innerHTML = '';
             
-            if (col === 'evaluasiArsip') {
-                titleLabel.innerText = 'Keterangan / Nama Evaluasi';
-            } else if (col === 'berkasGuru') {
-                titleLabel.innerText = 'Judul Berkas Administrasi';
-            } else {
-                titleLabel.innerText = 'Judul Perangkat / Modul';
-            }
+            titleLabel.innerText = 'Judul Perangkat / Dokumen / Arsip';
             document.getElementById('modal-add-file').classList.remove('hidden');
         };
 
         window.saveExplorerFolder = async (e) => {
             e.preventDefault();
-            const col = window.state.currentView === 'dataGuru' ? (window.state.dataGuruTab || 'materials') : window.state.currentView;
+            const col = window.state.currentView === 'dataGuru' ? 'materials' : window.state.currentView;
             const id = window.generateId();
             const name = document.getElementById('ex-folder-name').value;
             const targetUid = window.state.selectedTeacherId || window.state.currentUser.id;
@@ -1094,9 +1108,8 @@
 
             const success = await window.saveToCloud(col, id, dataObj, false);
             if(success) {
-                if (col === 'materials') window.localDb['berkasGuru'].push(dataObj);
-                if (col === 'berkasGuru') window.localDb['materials'].push(dataObj);
-
+                // PERBAIKAN BUG 1: Menghapus duplikasi manual .push() ke localDb 
+                // karena fungsi saveToCloud sudah secara otomatis menangani pembaruan state lokal
                 window.closeModal('modal-add-folder'); document.getElementById('ex-folder-name').value = '';
                 window.showToast('Folder berhasil dibuat!'); window.renderApp();
             }
@@ -1105,7 +1118,7 @@
 
         window.saveExplorerFile = async (e) => {
             e.preventDefault();
-            const col = window.state.currentView === 'dataGuru' ? (window.state.dataGuruTab || 'materials') : window.state.currentView;
+            const col = window.state.currentView === 'dataGuru' ? 'materials' : window.state.currentView;
             const id = document.getElementById('ex-file-id').value || window.generateId();
             const targetUid = window.state.selectedTeacherId || window.state.currentUser.id;
             const fileInput = document.getElementById('ex-file-input');
@@ -1142,8 +1155,7 @@
 
                 const success = await window.saveToCloud(col, id, dataObj, false);
                 if (success) {
-                    if (col === 'materials') window.localDb['berkasGuru'].push(dataObj);
-                    if (col === 'berkasGuru') window.localDb['materials'].push(dataObj);
+                    // PERBAIKAN BUG 1: Menghapus duplikasi manual .push() ke localDb
                     window.closeModal('modal-add-file');
                     window.showToast('File berhasil diunggah dan disimpan!');
                     window.renderApp();
@@ -1157,6 +1169,37 @@
                 btn.disabled = false;
                 if (statusEl.innerHTML.includes('Mengunggah') || statusEl.innerHTML.includes('Menyimpan')) {
                     statusEl.innerHTML = '';
+                }
+            }
+        };
+
+        window.savePenilaianConfig = async (e) => {
+            e.preventDefault();
+            const pTab = window.state.penilaianSubView || 'bulanan';
+            let month = pTab === 'semesteran' ? (window.state.penilaianSemester || '1') : (window.state.penilaianMonth || window.getToday().substring(0,7));
+            
+            let record = window.localDb.penilaian.find(p => p?.teacherId === window.state.selectedTeacherId && p?.type === pTab && p?.month === month);
+            let id = record ? record.id : window.generateId();
+            
+            if (['bulanan', 'semesteran'].includes(pTab)) {
+                const mapelInput = document.getElementById('penilaian-mapel');
+                const mapel = mapelInput?.value.trim();
+                
+                if (!mapel) return window.showToast('Nama Mapel tidak boleh kosong!', 'error');
+
+                let aspects = [];
+                if (record && record.aspects && JSON.parse(record.aspects).length > 0) { aspects = JSON.parse(record.aspects); } 
+                else { aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama']; }
+                
+                if(!aspects.includes(mapel)) { aspects.push(mapel); } 
+                else { return window.showToast(`Mapel '${mapel}' sudah ada di tabel.`, 'error'); }
+                
+                let data = record || { id, teacherId: window.state.selectedTeacherId, type: pTab, month: month, scores: '{}', status: 'Menunggu' };
+                data.aspects = JSON.stringify(aspects);
+                
+                if(await window.saveToCloud('penilaian', id, data)) { 
+                    window.closeModal('add-penilaian-modal'); mapelInput.value = '';
+                    window.showToast(`Kolom ${mapel} berhasil ditambahkan.`); window.renderApp(); 
                 }
             }
         };
@@ -1289,6 +1332,10 @@
                 const isSuperAdmin = u.role === 'Super Admin';
                 const readOnly = isSuperAdmin;
 
+                // Track current scroll position to prevent jumping
+                const contentAreaElement = document.getElementById('main-content-area');
+                const currentScrollPos = contentAreaElement ? contentAreaElement.scrollTop : 0;
+
                 // Set Sidebar Info
                 document.getElementById('sidebar-user-name').innerText = u.name || 'Guru';
                 document.getElementById('sidebar-user-role').innerText = u.role || '';
@@ -1305,7 +1352,7 @@
                         { id: 'jurnal', icon: 'fa-book', text: 'Jurnal Harian' },
                         { id: 'progsus', icon: 'fa-star', text: 'Rekap Progsus' },
                         { id: 'penilaian', icon: 'fa-clipboard-list', text: 'Buku Penilaian Terpadu' },
-                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Perangkat & Arsip' },
+                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Data Guru / Berkas' },
                         { id: 'studentDocs', icon: 'fa-id-card', text: 'Arsip Dokumen Siswa' },
                         { id: 'guru', icon: 'fa-chalkboard-teacher', text: 'Manajemen Akun Guru' }
                     ];
@@ -1314,7 +1361,7 @@
                         { id: 'dashboard', icon: 'fa-chart-pie', text: 'Dashboard Utama' },
                         { id: 'jurnalStimulasi', icon: 'fa-brain', text: 'Jurnal Stimulasi ABA & SI' },
                         { id: 'rekapStimulasi', icon: 'fa-history', text: 'Rekap Jurnal Stimulasi' },
-                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Perangkat & Arsip' },
+                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Data Guru / Berkas' },
                         { id: 'studentDocs', icon: 'fa-id-card', text: 'Arsip Dokumen Siswa' }
                     ];
                 } else {
@@ -1325,13 +1372,13 @@
                         { id: 'jurnal', icon: 'fa-book', text: 'Jurnal Harian' },
                         { id: 'progsus', icon: 'fa-star', text: 'Rekap Progsus' },
                         { id: 'penilaian', icon: 'fa-clipboard-list', text: 'Buku Penilaian Terpadu' },
-                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Perangkat & Arsip' },
+                        { id: 'dataGuru', icon: 'fa-folder-tree', text: 'Data Guru / Berkas' },
                         { id: 'studentDocs', icon: 'fa-id-card', text: 'Arsip Dokumen Siswa' }
                     ];
                 }
 
                 menuContainer.innerHTML = menus.map(m => `
-                    <button onclick="window.state.currentView='${m.id}'; window.state.editModalData = null; window.state.editEkstraData = null; window.state.activeFolder_materials='_ROOT_'; window.state.activeFolder_evaluasiArsip='_ROOT_'; window.state.activeFolder_berkasGuru='_ROOT_'; window.state.dataGuruTab='materials'; window.state.penilaianSubView='nilai'; window.renderApp()" class="w-full text-left px-4 py-3 rounded-xl flex items-center transition-all ${window.state.currentView === m.id || (window.state.currentView === 'rekapStimulasi' && m.id === 'rekapStimulasi') ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100 hover:text-indigo-600'}">
+                    <button onclick="window.state.currentView='${m.id}'; window.state.editModalData = null; window.state.editEkstraData = null; window.state.activeFolder_materials='_ROOT_'; window.state.activeFolder_evaluasiArsip='_ROOT_'; window.state.activeFolder_berkasGuru='_ROOT_'; window.state.penilaianSubView='nilai'; window.renderApp()" class="w-full text-left px-4 py-3 rounded-xl flex items-center transition-all ${window.state.currentView === m.id || (window.state.currentView === 'rekapStimulasi' && m.id === 'rekapStimulasi') ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100 hover:text-indigo-600'}">
                         <div class="w-8 text-center"><i class="fas ${m.icon}"></i></div>
                         <span class="font-bold text-sm">${m.text}</span>
                     </button>
@@ -1959,6 +2006,108 @@
                         let scores = record && record.scores ? JSON.parse(record.scores) : {};
                         
                         if(!record || aspects.length === 0) { aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama']; }
+                        
+                        let tablesHTML = '';
+                        if (subView === 'bulanan') {
+                            tablesHTML = `
+                                    <div class="border border-slate-300 rounded-xl overflow-hidden bg-white shadow-sm relative">
+                                        <div class="overflow-x-auto custom-scrollbar pb-2">
+                                            <table class="w-full text-sm border-collapse min-w-max text-center">
+                                                <thead>
+                                                    <tr class="bg-slate-100 border-b border-slate-300 text-slate-700">
+                                                        <th class="p-3 text-left border-r border-slate-300 font-black sticky left-0 bg-slate-100 z-10 w-48 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" rowspan="3">Nama Siswa</th>
+                                                        <th class="p-3 text-center font-black bg-indigo-50 text-indigo-800" colspan="${aspects.length * 2}">Mapel / Tema</th>
+                                                    </tr>
+                                                    <tr class="bg-white border-b border-slate-300 text-slate-700">
+                                                        ${aspects.map(mapel => `
+                                                            <th class="p-2 border-r border-slate-300 font-bold text-center relative group min-w-[120px]" colspan="2">
+                                                                ${mapel}
+                                                                ${!readOnly ? `
+                                                                <div class="flex gap-1 justify-center mt-1 absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition z-10">
+                                                                    <button type="button" onclick="window.openEditMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-5 h-5 rounded bg-indigo-100 hover:bg-indigo-600 text-indigo-600 hover:text-white flex items-center justify-center transition shadow-sm"><i class="fas fa-pen text-[9px]"></i></button>
+                                                                    <button type="button" onclick="window.deleteMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-5 h-5 rounded bg-rose-100 hover:bg-rose-600 text-rose-600 hover:text-white flex items-center justify-center transition shadow-sm"><i class="fas fa-trash text-[9px]"></i></button>
+                                                                </div>` : ''}
+                                                            </th>
+                                                        `).join('')}
+                                                    </tr>
+                                                    <tr class="bg-slate-50 border-b border-slate-300 text-slate-600">
+                                                        ${aspects.map(mapel => `
+                                                            <th class="p-1.5 border-r border-slate-300 text-center text-[10px] w-16">Pengetahuan</th>
+                                                            <th class="p-1.5 border-r border-slate-300 text-center text-[10px] w-16">Keterampilan</th>
+                                                        `).join('')}
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    ${targetStudents.length === 0 ? `<tr><td colspan="${(aspects.length * 2) + 1}" class="text-center p-8 text-slate-400">Tidak ada data siswa.</td></tr>` : targetStudents.map((s, idx) => `
+                                                    <tr class="border-b border-slate-200 hover:bg-slate-50 transition last:border-b-0">
+                                                        <td class="p-3 text-left border-r border-slate-300 font-bold text-slate-800 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] truncate max-w-[150px]">${s.name}</td>
+                                                        ${aspects.map(mapel => {
+                                                            let keyP = `${mapel}_P`; let keyK = `${mapel}_K`;
+                                                            let valP = scores[s.id] && scores[s.id][keyP] ? scores[s.id][keyP] : '';
+                                                            let valK = scores[s.id] && scores[s.id][keyK] ? scores[s.id][keyK] : '';
+                                                            return `<td class="p-0 border-r border-slate-300"><input type="text" value="${valP}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${keyP}', this.value)" class="w-full h-full text-center p-2 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td><td class="p-0 border-r border-slate-300"><input type="text" value="${valK}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${keyK}', this.value)" class="w-full h-full text-center p-2 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>`;
+                                                        }).join('')}
+                                                    </tr>
+                                                    `).join('')}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                            `;
+                        } else {
+                            tablesHTML = aspects.map(mapel => `
+                                        <div class="border border-slate-300 rounded-xl overflow-hidden bg-white shadow-sm relative group mb-8">
+                                            <div class="bg-slate-100 p-3 flex justify-between items-center border-b border-slate-300 pr-12 md:pr-4">
+                                                <h4 class="font-bold text-slate-800 uppercase tracking-widest text-sm mx-auto pl-8 md:pl-0">${mapel}</h4>
+                                                ${!readOnly ? `
+                                                <div class="flex gap-1 absolute right-3 md:relative md:right-0 md:opacity-0 md:group-hover:opacity-100 transition no-print z-10">
+                                                    <button type="button" onclick="window.openEditMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-7 h-7 rounded bg-indigo-100 hover:bg-indigo-600 text-indigo-600 hover:text-white flex items-center justify-center transition shadow-sm" title="Edit Nama Mapel"><i class="fas fa-pen text-[10px]"></i></button>
+                                                    <button type="button" onclick="window.deleteMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-7 h-7 rounded bg-rose-100 hover:bg-rose-600 text-rose-600 hover:text-white flex items-center justify-center transition shadow-sm" title="Hapus Mapel"><i class="fas fa-trash text-[10px]"></i></button>
+                                                </div>` : ''}
+                                            </div>
+                                            <div class="overflow-x-auto custom-scrollbar pb-2">
+                                                <table class="w-full text-sm border-collapse min-w-max text-center">
+                                                    <thead>
+                                                        <tr class="bg-white border-b border-slate-300 text-slate-600">
+                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-12">No</th>
+                                                            <th class="p-3 text-left border-r border-slate-300 font-bold sticky left-0 bg-white z-10 w-48 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Nama Siswa</th>
+                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">Formatif</th>
+                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">STS</th>
+                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">SAS</th>
+                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-24 bg-slate-50 text-indigo-700">N. Akhir</th>
+                                                            <th class="p-3 text-left font-bold min-w-[200px]">Catatan Capaian / Deskripsi Perkembangan Siswa</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        ${targetStudents.length === 0 ? `<tr><td colspan="7" class="text-center p-8 text-slate-400">Tidak ada data siswa.</td></tr>` : targetStudents.map((s, idx) => {
+                                                            let f = scores[s.id]?.[`${mapel}_F`] || '';
+                                                            let sts = scores[s.id]?.[`${mapel}_STS`] || '';
+                                                            let sas = scores[s.id]?.[`${mapel}_SAS`] || '';
+                                                            let cat = scores[s.id]?.[`${mapel}_Catatan`] || '';
+                                                            
+                                                            let total = 0; let count = 0;
+                                                            if(f) { total += Number(f); count++; }
+                                                            if(sts) { total += Number(sts); count++; }
+                                                            if(sas) { total += Number(sas); count++; }
+                                                            let na = count > 0 ? Math.round(total / count) : '-';
+
+                                                            return `
+                                                            <tr class="border-b border-slate-200 hover:bg-slate-50 transition last:border-b-0">
+                                                                <td class="p-3 border-r border-slate-300 text-center">${idx + 1}</td>
+                                                                <td class="p-3 text-left border-r border-slate-300 font-bold text-slate-800 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] truncate max-w-[150px]">${s.name}</td>
+                                                                <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${f}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_F', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
+                                                                <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${sts}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_STS', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
+                                                                <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${sas}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_SAS', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
+                                                                <td class="p-3 border-r border-slate-300 text-center font-black text-indigo-700 bg-indigo-50/50">${na}</td>
+                                                                <td class="p-1"><textarea ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_Catatan', this.value)" class="w-full bg-transparent border-0 outline-none resize-none text-xs p-2 custom-scrollbar h-12 focus:bg-white focus:ring-1 focus:ring-indigo-300 rounded" placeholder="Ketik catatan perkembangan...">${cat}</textarea></td>
+                                                            </tr>`;
+                                                        }).join('')}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                            `).join('');
+                        }
 
                         contentHTML = `
                             <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[75vh]">
@@ -1980,77 +2129,8 @@
                                     </div>
                                 </div>
                                 
-                                <div class="flex-1 overflow-auto custom-scrollbar bg-slate-50 relative pb-12 p-6 space-y-8">
-                                    ${aspects.map(mapel => `
-                                        <div class="border border-slate-300 rounded-xl overflow-hidden bg-white shadow-sm relative group">
-                                            <div class="bg-slate-100 p-3 flex justify-between items-center border-b border-slate-300 pr-12 md:pr-4">
-                                                <h4 class="font-bold text-slate-800 uppercase tracking-widest text-sm mx-auto pl-8 md:pl-0">${mapel}</h4>
-                                                ${!readOnly ? `
-                                                <div class="flex gap-1 absolute right-3 md:relative md:right-0 md:opacity-0 md:group-hover:opacity-100 transition no-print z-10">
-                                                    <button type="button" onclick="window.openEditMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-7 h-7 rounded bg-indigo-100 hover:bg-indigo-600 text-indigo-600 hover:text-white flex items-center justify-center transition shadow-sm" title="Edit Nama Mapel"><i class="fas fa-pen text-[10px]"></i></button>
-                                                    <button type="button" onclick="window.deleteMapel('${recordId}', '${mapel.replace(/'/g, "\\'")}')" class="w-7 h-7 rounded bg-rose-100 hover:bg-rose-600 text-rose-600 hover:text-white flex items-center justify-center transition shadow-sm" title="Hapus Mapel"><i class="fas fa-trash text-[10px]"></i></button>
-                                                </div>` : ''}
-                                            </div>
-                                            <div class="overflow-x-auto custom-scrollbar pb-2">
-                                                <table class="w-full text-sm border-collapse min-w-max text-center">
-                                                    <thead>
-                                                        ${subView === 'bulanan' ? `
-                                                        <tr class="bg-white border-b border-slate-300 text-slate-600"><th class="p-3 text-left border-r border-slate-300 font-bold sticky left-0 bg-white z-10 w-48 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" rowspan="2">Nama Siswa</th>${[1,2,3,4,5].map(p => `<th class="p-2 border-r border-slate-300 font-bold text-slate-700 text-center" colspan="2">Pertemuan ${p}</th>`).join('')}</tr>
-                                                        <tr class="bg-slate-50 border-b border-slate-300 text-slate-600">${[1,2,3,4,5].map(p => `<th class="p-1 border-r border-slate-300 text-center text-[10px] w-16">P</th><th class="p-1 border-r border-slate-300 text-center text-[10px] w-16">K</th>`).join('')}</tr>
-                                                        ` : `
-                                                        <tr class="bg-white border-b border-slate-300 text-slate-600">
-                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-12">No</th>
-                                                            <th class="p-3 text-left border-r border-slate-300 font-bold sticky left-0 bg-white z-10 w-48 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Nama Siswa</th>
-                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">Formatif</th>
-                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">STS</th>
-                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-20">SAS</th>
-                                                            <th class="p-3 text-center border-r border-slate-300 font-bold w-24 bg-slate-50 text-indigo-700">N. Akhir</th>
-                                                            <th class="p-3 text-left font-bold min-w-[200px]">Catatan Capaian / Deskripsi Perkembangan Siswa</th>
-                                                        </tr>
-                                                        `}
-                                                    </thead>
-                                                    <tbody>
-                                                        ${targetStudents.length === 0 ? `<tr><td colspan="${subView==='bulanan'?11:7}" class="text-center p-8 text-slate-400">Tidak ada data siswa.</td></tr>` : targetStudents.map((s, idx) => {
-                                                            if (subView === 'bulanan') {
-                                                                return `
-                                                                <tr class="border-b border-slate-200 hover:bg-slate-50 transition last:border-b-0">
-                                                                    <td class="p-3 text-left border-r border-slate-300 font-bold text-slate-800 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] truncate max-w-[150px]">${s.name}</td>
-                                                                    ${[1,2,3,4,5].map(p => {
-                                                                        let keyP = `${mapel}_p${p}_P`; let keyK = `${mapel}_p${p}_K`;
-                                                                        let valP = scores[s.id] && scores[s.id][keyP] ? scores[s.id][keyP] : '';
-                                                                        let valK = scores[s.id] && scores[s.id][keyK] ? scores[s.id][keyK] : '';
-                                                                        return `<td class="p-0 border-r border-slate-300 w-16"><input type="text" value="${valP}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${keyP}', this.value)" class="w-full h-full text-center p-2 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td><td class="p-0 border-r border-slate-300 w-16 last:border-r-0"><input type="text" value="${valK}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${keyK}', this.value)" class="w-full h-full text-center p-2 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>`;
-                                                                    }).join('')}
-                                                                </tr>`;
-                                                            } else {
-                                                                let f = scores[s.id]?.[`${mapel}_F`] || '';
-                                                                let sts = scores[s.id]?.[`${mapel}_STS`] || '';
-                                                                let sas = scores[s.id]?.[`${mapel}_SAS`] || '';
-                                                                let cat = scores[s.id]?.[`${mapel}_Catatan`] || '';
-                                                                
-                                                                let total = 0; let count = 0;
-                                                                if(f) { total += Number(f); count++; }
-                                                                if(sts) { total += Number(sts); count++; }
-                                                                if(sas) { total += Number(sas); count++; }
-                                                                let na = count > 0 ? Math.round(total / count) : '-';
-
-                                                                return `
-                                                                <tr class="border-b border-slate-200 hover:bg-slate-50 transition last:border-b-0">
-                                                                    <td class="p-3 border-r border-slate-300 text-center">${idx + 1}</td>
-                                                                    <td class="p-3 text-left border-r border-slate-300 font-bold text-slate-800 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] truncate max-w-[150px]">${s.name}</td>
-                                                                    <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${f}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_F', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
-                                                                    <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${sts}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_STS', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
-                                                                    <td class="p-0 border-r border-slate-300 w-20"><input type="number" value="${sas}" ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_SAS', this.value); window.renderApp()" class="w-full h-full text-center p-3 rounded-none outline-none focus:bg-indigo-50 border border-transparent transition font-bold text-slate-800 bg-transparent text-sm" placeholder="-"></td>
-                                                                    <td class="p-3 border-r border-slate-300 text-center font-black text-indigo-700 bg-indigo-50/50">${na}</td>
-                                                                    <td class="p-1"><textarea ${readOnly?'disabled':''} onchange="window.updateScore('${recordId}', '${s.id}', '${mapel}_Catatan', this.value)" class="w-full bg-transparent border-0 outline-none resize-none text-xs p-2 custom-scrollbar h-12 focus:bg-white focus:ring-1 focus:ring-indigo-300 rounded" placeholder="Ketik catatan perkembangan...">${cat}</textarea></td>
-                                                                </tr>`;
-                                                            }
-                                                        }).join('')}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    `).join('')}
+                                <div class="flex-1 overflow-auto custom-scrollbar bg-slate-50 relative pb-12 p-6">
+                                    ${tablesHTML}
                                 </div>
                             </div>
                         `;
@@ -2082,8 +2162,8 @@
                 }
 
                 else if (window.state.currentView === 'dataGuru') {
-                    const col = window.state.dataGuruTab || 'materials'; 
-                    const activeFol = window.state[`activeFolder_${col}`] || '_ROOT_';
+                    const col = 'materials'; 
+                    const activeFol = window.state.activeFolder_materials || '_ROOT_';
                     
                     const items = (window.localDb[col]||[]).filter(m => {
                         if (m?.teacherId && m.teacherId !== targetUid) return false;
@@ -2091,43 +2171,42 @@
                         return matchCat === activeFol;
                     });
                     
-                    const fd = activeFol !== '_ROOT_' ? (window.localDb[col]||[]).find(f => f?.id === activeFol) : null;
-                    const fName = fd ? (fd.title || fd.notes || 'Folder') : (col === 'materials' ? 'Modul Ajar & Perangkat' : (col === 'berkasGuru' ? 'Berkas Administrasi Guru' : 'Arsip Evaluasi'));
+                    // Build Breadcrumbs
+                    let breadcrumbs = [];
+                    let curr = activeFol;
+                    while(curr !== '_ROOT_') {
+                        let f = (window.localDb[col]||[]).find(x => x.id === curr);
+                        if(f) {
+                            breadcrumbs.unshift({ id: f.id, title: f.title || f.notes || 'Folder' });
+                            curr = f.type || '_ROOT_';
+                        } else { break; }
+                    }
+                    breadcrumbs.unshift({ id: '_ROOT_', title: 'Arsip / Berkas Utama' });
+                    
+                    let breadcrumbHTML = breadcrumbs.map((b, i) => {
+                        if (i === breadcrumbs.length - 1) return `<span class="text-slate-800 font-bold">${b.title}</span>`;
+                        return `<button onclick="window.state.activeFolder_materials='${b.id}'; window.renderApp()" class="text-indigo-600 hover:underline font-bold">${b.title}</button> <span class="text-slate-400 mx-1">/</span> `;
+                    }).join('');
 
                     content.innerHTML = `
                         <div class="mb-6 fade-in flex flex-wrap justify-between items-center gap-4">
                             <div>
-                                <h2 class="text-2xl font-black text-slate-800 tracking-tight">Perangkat & Arsip Guru</h2>
-                                <p class="text-slate-500 text-sm mt-1 font-medium">Penyimpanan terpadu untuk Modul Ajar, Evaluasi Siswa, dan Berkas Administrasi Pribadi.</p>
+                                <h2 class="text-2xl font-black text-slate-800 tracking-tight">Data Guru & File Explorer</h2>
+                                <p class="text-slate-500 text-sm mt-1 font-medium">Penyimpanan terpadu untuk Modul Ajar, Evaluasi Siswa, dan Berkas Administrasi Pribadi secara hirarkis.</p>
                             </div>
                         </div>
                         
                         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden fade-in flex flex-col min-h-[60vh]">
-                            <div class="flex overflow-x-auto bg-slate-50 border-b border-slate-100 custom-scrollbar">
-                                <button onclick="window.state.dataGuruTab = 'materials'; window.state.activeFolder_materials='_ROOT_'; window.renderApp();" 
-                                    class="px-6 py-4 text-sm font-bold whitespace-nowrap border-b-[3px] transition ${col === 'materials' ? 'border-sky-600 text-sky-600 bg-white shadow-sm' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'}">
-                                    <i class="fas fa-folder-open mr-2"></i> Modul Ajar & Perangkat
-                                </button>
-                                <button onclick="window.state.dataGuruTab = 'evaluasiArsip'; window.state.activeFolder_evaluasiArsip='_ROOT_'; window.renderApp();" 
-                                    class="px-6 py-4 text-sm font-bold whitespace-nowrap border-b-[3px] transition ${col === 'evaluasiArsip' ? 'border-sky-600 text-sky-600 bg-white shadow-sm' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'}">
-                                    <i class="fas fa-file-signature mr-2"></i> Arsip Evaluasi
-                                </button>
-                                <button onclick="window.state.dataGuruTab = 'berkasGuru'; window.state.activeFolder_berkasGuru='_ROOT_'; window.renderApp();" 
-                                    class="px-6 py-4 text-sm font-bold whitespace-nowrap border-b-[3px] transition ${col === 'berkasGuru' ? 'border-sky-600 text-sky-600 bg-white shadow-sm' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'}">
-                                    <i class="fas fa-briefcase mr-2"></i> Berkas Adm. Guru
-                                </button>
-                            </div>
-                            
                             <div class="p-6 flex-1 bg-slate-50/50">
                                 <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-                                    <div class="flex items-center gap-3">
-                                        ${activeFol !== '_ROOT_' ? `<button onclick="window.state['activeFolder_${col}'] = '_ROOT_'; window.renderApp()" class="w-10 h-10 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 flex items-center justify-center transition shadow-sm relative z-10"><i class="fas fa-arrow-left"></i></button>` : ''}
-                                        <h3 class="text-xl font-bold text-slate-800">${fName}</h3>
+                                    <div class="flex items-center gap-3 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm text-sm">
+                                        <i class="fas fa-folder-tree text-indigo-500 mr-2"></i>
+                                        ${breadcrumbHTML}
                                     </div>
                                     <div class="flex gap-2 w-full md:w-auto z-10">
                                         ${!readOnly ? `
                                         <button onclick="document.getElementById('modal-add-folder').classList.remove('hidden')" class="flex-1 md:flex-none bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center justify-center"><i class="fas fa-folder-plus mr-2"></i> Buat Folder</button>
-                                        <button onclick="window.openAddFileModal()" class="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center justify-center"><i class="fas fa-file-upload mr-2"></i> Tambah Dokumen</button>
+                                        <button onclick="window.openAddFileModal()" class="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center justify-center"><i class="fas fa-file-upload mr-2"></i> Unggah Dokumen</button>
                                         ` : ''}
                                     </div>
                                 </div>
@@ -2145,7 +2224,7 @@
                                             else if (fileLink.match(/\.(jpg|jpeg|png|gif|webp)(?:\?|$)/i)) ic = 'fa-image text-emerald-500 bg-emerald-100';
                                         }
 
-                                        const onCardClick = isF ? `window.state['activeFolder_${col}']='${f.id}'; window.renderApp()` : (fileLink ? `window.openFileViewer('${fileLink}', '${titleText.replace(/'/g, "\\'")}')` : '');
+                                        const onCardClick = isF ? `window.state.activeFolder_materials='${f.id}'; window.renderApp()` : (fileLink ? `window.openFileViewer('${fileLink}', '${titleText.replace(/'/g, "\\'")}')` : '');
                                         return `<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 group relative cursor-pointer flex items-center justify-between hover:shadow-md hover:border-indigo-300 transition" onclick="${onCardClick}"><div class="flex items-center gap-4 truncate pr-4"><div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 ${ic}"><i class="fas ${isF?'fa-folder':(fileLink.toLowerCase().includes('.pdf')?'fa-file-pdf':(fileLink.toLowerCase().includes('.doc')?'fa-file-word':(fileLink.match(/\.(jpg|jpeg|png|gif|webp)(?:\?|$)/i)?'fa-image':'fa-file-alt')))}"></i></div><div class="truncate"><h4 class="font-bold text-sm text-slate-800 truncate">${titleText}</h4><p class="text-[10px] uppercase font-bold text-slate-400 mt-0.5">${isF?'Folder':'Dokumen'}</p></div></div><div class="flex gap-1 shrink-0 relative z-10">${!isF && fileLink ? `<a href="${fileLink}" target="_blank" onclick="event.stopPropagation()" class="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white flex items-center justify-center transition shadow-sm" title="Unduh File"><i class="fas fa-download text-xs"></i></a>` : ''}${!readOnly ? `<button onclick="event.stopPropagation(); window.deleteFileItem('${col}', '${f.id}', 'Item')" class="w-8 h-8 rounded-full bg-rose-50 text-rose-500 hover:bg-rose-500 hover:text-white flex items-center justify-center transition shadow-sm" title="Hapus"><i class="fas fa-trash text-xs"></i></button>` : ''}</div></div>`;
                                     }).join('')}
                                 </div>
@@ -2153,7 +2232,17 @@
                         </div>
                     `;
                 }
-            } catch(e) { console.error("Render Error:", e); window.showToast('Gagal memuat tampilan: ' + e.message, 'error'); }
+
+                // Restore Scroll Position seamlessly without jumping
+                if (contentAreaElement) {
+                    requestAnimationFrame(() => {
+                        contentAreaElement.scrollTop = currentScrollPos;
+                    });
+                }
+            } catch(e) { 
+                console.error("Render Error:", e); 
+                window.showToast('Gagal memuat tampilan: ' + e.message, 'error'); 
+            }
         };
 
         // Initialize App on Load
