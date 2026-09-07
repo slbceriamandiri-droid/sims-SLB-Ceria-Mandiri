@@ -246,18 +246,18 @@
             studentSearchQuery: '',
             rekapStudentId: null,
             rekapMonth: null,
-            dataGuruTab: 'materials', // 'materials', 'evaluasiArsip' or 'berkasGuru'
-            qnTargetStudent: null, // Untuk modal Quick Note
+            dataGuruTab: 'materials', 
+            qnTargetStudent: null,
             raportSemester: '1'
         };
         
         window.localDb = { 
             teachers: [], students: [], attendance: [], journals: [], progsus: [], 
             jurnalStimulasi: [], penilaian: [], studentDocs: [], materials: [], evaluasiArsip: [], berkasGuru: [],
-            jurnalHarianCepat: [] // Tabel baru untuk Quick Note HP
+            jurnalHarianCepat: [] 
         };
 
-        // Antrian untuk mencegah race condition pada penyimpanan absensi cepat
+        // Antrian untuk mencegah race condition
         window.attendanceQueue = Promise.resolve();
         window.penilaianQueue = Promise.resolve();
         window.qnQueue = Promise.resolve();
@@ -417,8 +417,7 @@
                 if (!clean.type && clean.category) clean.type = clean.category;
                 if (!clean.category && clean.type) clean.category = clean.type;
                 
-                // PERBAIKAN BUG 2: Proteksi strict null untuk studentId 
-                // untuk mencegah kegagalan constraint foreign key di Supabase
+                // PERBAIKAN BUG: Proteksi strict null untuk studentId 
                 if (clean.studentId === undefined || clean.studentId === '') {
                     clean.studentId = null;
                 }
@@ -466,7 +465,6 @@
                     if (error.message.includes('notes')) delete altData.notes;
                     if (error.message.includes('title')) delete altData.title;
 
-                    // Exclusively for evaluasi_arsip if studentId is rigidly required
                     if (tableName === 'evaluasi_arsip' && error.message.includes('studentId') && altData.studentId === undefined) {
                         altData.studentId = null;
                     }
@@ -477,7 +475,6 @@
                 }
 
                 if (error) {
-                    // Rollback memory if cloud failed
                     if (oldData) { window.localDb[table][idx] = oldData; } 
                     else { window.localDb[table] = window.localDb[table].filter(item => item?.id !== id); }
                     if(!background) window.renderApp(); 
@@ -499,7 +496,6 @@
 
         window.loadAppData = async () => {
             try {
-                // Table mappings logic Memory -> DB
                 const tables = [
                     { memory: 'teachers', db: 'teachers' },
                     { memory: 'students', db: 'students' },
@@ -510,7 +506,7 @@
                     { memory: 'penilaian', db: 'penilaian' },
                     { memory: 'materials', db: 'perangkat_belajar' }, 
                     { memory: 'evaluasiArsip', db: 'evaluasi_arsip' },
-                    { memory: 'jurnalHarianCepat', db: 'jurnal_harian_cepat' }  // Tambahan tabel baru
+                    { memory: 'jurnalHarianCepat', db: 'jurnal_harian_cepat' }
                 ];
                 
                 await Promise.all(tables.map(async (t) => {
@@ -521,7 +517,6 @@
                             .order('id', { ascending: true })
                             .limit(10000);
                             
-                        // Fallback attempt to old table name
                         if (error && t.db !== t.memory) {
                              console.warn(`Gagal menarik tabel '${t.db}'. Mencoba fallback ke '${t.memory}'...`);
                              const fallback = await window.supabaseClient.from(t.memory).select('*');
@@ -534,7 +529,6 @@
                         } else {
                             window.localDb[t.memory] = data || [];
                             if (t.memory === 'materials') {
-                                // Clone data array untuk entitas berkas_guru yang membagikan tabel yang sama
                                 window.localDb['berkasGuru'] = JSON.parse(JSON.stringify(data || []));
                             }
                         }
@@ -560,7 +554,6 @@
                     
                     window.localDb[table] = window.localDb[table].filter(item => item?.id !== id);
                     
-                    // Cleanup tabel kloning virtual
                     if (table === 'materials') window.localDb['berkasGuru'] = window.localDb['berkasGuru'].filter(item => item?.id !== id);
                     if (table === 'berkasGuru') window.localDb['materials'] = window.localDb['materials'].filter(item => item?.id !== id);
 
@@ -649,7 +642,6 @@
             window.showToast("Berhasil keluar dari aplikasi.");
         };
 
-        // Documents & Modals Handler
         window.openFileViewer = (fileUrl, fileTitle) => {
             const viewer = document.getElementById('modal-file-viewer');
             const contentArea = document.getElementById('viewer-content-area');
@@ -739,6 +731,38 @@
             }
         };
 
+        // --- FUNGSI BARU UNTUK ABSENSI CLOUD EKSPLISIT ---
+        window.saveAttendance = async (dataObj) => {
+            try {
+                const payload = {
+                    id: dataObj.id,
+                    teacherId: dataObj.teacherId, // camelCase format memory
+                    student_id: dataObj.studentId || null, // Format untuk DB Cloud Table
+                    date: dataObj.date,
+                    status: dataObj.status
+                };
+
+                const { data, error } = await window.supabaseClient
+                    .from('attendance')
+                    .upsert(payload, { onConflict: 'id' })
+                    .select();
+
+                if (error && error.message && error.message.includes('does not exist')) {
+                     console.warn("Mencoba fallback skema kolom absensi...", error);
+                     let altData = { ...payload, studentId: payload.student_id };
+                     delete altData.student_id; // Coba format kolom lama jika student_id tidak dikenali
+                     const retry = await window.supabaseClient.from('attendance').upsert(altData, { onConflict: 'id' }).select();
+                     if (retry.error) throw retry.error;
+                } else if (error) {
+                    throw error;
+                }
+                return true;
+            } catch (err) {
+                console.error("Gagal saveAttendance:", err);
+                throw err;
+            }
+        };
+
         window.updateAttendance = (studentId, date, status, element) => {
             try {
                 if (element) {
@@ -754,48 +778,37 @@
                         window.localDb.attendance = window.localDb.attendance.filter(a => a.id !== existing.id);
                         window.recalcAttendanceTotals(studentId);
                         
-                        // Hapus dari cloud (antrean aman)
                         window.attendanceQueue = window.attendanceQueue.then(async () => {
                             try {
                                 const { error } = await window.supabaseClient.from('attendance').delete().eq('id', existing.id);
-                                if (error) {
-                                    window.localDb.attendance.push(existing); // Rollback
-                                    window.recalcAttendanceTotals(studentId);
-                                    if(window.state.currentView === 'attendance') window.renderApp();
-                                    throw error;
-                                }
+                                if (error) throw error;
                             } catch (err) {
                                 console.error("Gagal hapus absensi dari server:", err);
+                                window.localDb.attendance.push(existing); 
+                                window.recalcAttendanceTotals(studentId);
+                                if(window.state.currentView === 'attendance') window.renderApp();
                             }
                         });
                     }
-                    if (element) {
-                        element.disabled = false;
-                        element.classList.remove('opacity-50', 'animate-pulse', 'text-rose-500');
-                    }
+                    if (element) { element.disabled = false; element.classList.remove('opacity-50', 'animate-pulse', 'text-rose-500'); }
                     return; 
                 }
                 
                 let id = existing ? existing.id : window.generateId();
                 let dataObj = { id, teacherId, studentId, date, status };
                 
-                // Update Lokal Langsung agar UI Responsif
                 const idx = window.localDb.attendance.findIndex(a => a.id === id);
                 if(idx > -1) window.localDb.attendance[idx] = dataObj;
                 else window.localDb.attendance.push(dataObj);
 
                 window.recalcAttendanceTotals(studentId);
                 
-                // Queueing Penyimpanan ke Supabase secara Urut & Aman
+                // Panggil saveAttendance spesifik
                 window.attendanceQueue = window.attendanceQueue.then(async () => {
                     try {
-                        const success = await window.saveToCloud('attendance', id, dataObj, true);
-                        if (!success) throw new Error("Gagal menyimpan absensi ke server cloud.");
+                        await window.saveAttendance(dataObj);
                     } catch (err) {
-                        console.error("Gagal melakukan sinkronisasi otomatis absensi:", err);
                         window.showToast('Gagal sinkronisasi absensi ke server. Memencet terlalu cepat!', 'error');
-                        
-                        // Error handling rollback visual indicator
                         if (element) {
                             element.classList.add('text-rose-500');
                             let val = '';
@@ -919,13 +932,13 @@
 
         window.savePenilaianConfig = async (e) => {
             e.preventDefault();
-            const pTab = window.state.penilaianTab;
-            let month = window.state.penilaianMonth || window.getToday().substring(0,7);
+            const pTab = window.state.penilaianSubView || 'bulanan';
+            let month = pTab === 'semesteran' ? (window.state.penilaianSemester || '1') : (window.state.penilaianMonth || window.getToday().substring(0,7));
             
             let record = window.localDb.penilaian.find(p => p?.teacherId === window.state.selectedTeacherId && p?.type === pTab && p?.month === month);
             let id = record ? record.id : window.generateId();
             
-            if (['harian', 'sts', 'sas'].includes(pTab)) {
+            if (['bulanan', 'semesteran'].includes(pTab)) {
                 const mapelInput = document.getElementById('penilaian-mapel');
                 const mapel = mapelInput?.value.trim();
                 
@@ -951,12 +964,11 @@
         window.updateScore = async (recordId, studentId, aspectKey, value) => {
             let record = window.localDb.penilaian.find(p => p?.id === recordId);
             if(!record) {
-                let pTab = window.state.penilaianTab;
-                let aspects = ['harian', 'sts', 'sas'].includes(pTab) ? ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama'] : [];
-                record = { id: recordId, teacherId: window.state.selectedTeacherId || window.state.currentUser.id, type: pTab, month: window.state.penilaianMonth || window.getToday().substring(0,7), aspects: JSON.stringify(aspects), scores: '{}', status: 'Menunggu' };
+                let pTab = window.state.penilaianSubView || 'bulanan';
+                let aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama'];
+                record = { id: recordId, teacherId: window.state.selectedTeacherId || window.state.currentUser.id, type: pTab, month: pTab === 'semesteran' ? (window.state.penilaianSemester||'1') : (window.state.penilaianMonth || window.getToday().substring(0,7)), aspects: JSON.stringify(aspects), scores: '{}', status: 'Menunggu' };
             }
             
-            // Optimistic update instan agar tidak terasa nge-lag
             let scores = JSON.parse(record.scores || '{}');
             if(!scores[studentId]) scores[studentId] = {};
             scores[studentId][aspectKey] = value;
@@ -966,56 +978,9 @@
             if(existingIdx > -1) window.localDb.penilaian[existingIdx] = record;
             else window.localDb.penilaian.push(record);
             
-            // Queueing Penyimpanan ke Cloud untuk cegah data hilang saat diketik cepat
             window.penilaianQueue = window.penilaianQueue.then(async () => {
                 await window.saveToCloud('penilaian', recordId, record, true);
             });
-        };
-        
-        window.openEditEkstra = (recordId, studentId, scoreId) => {
-            let record = window.localDb.penilaian.find(p => p.id === recordId);
-            let scores = record && record.scores ? JSON.parse(record.scores) : {};
-            let scoreData = (scores[studentId] || []).find(s => s.id === scoreId);
-            if(scoreData) { window.state.editEkstraData = { recordId, studentId, scoreId, ...scoreData }; window.renderApp(); }
-        };
-
-        window.saveEkstraScore = async (e, recordId) => {
-            e.preventDefault();
-            const sid = document.getElementById('ek-siswa').value; const keg = document.getElementById('ek-kegiatan').value;
-            const nil = document.getElementById('ek-nilai').value; const ket = document.getElementById('ek-ket').value;
-            let month = window.state.penilaianMonth || window.getToday().substring(0,7);
-            
-            let record = window.localDb.penilaian.find(p => p.id === recordId);
-            let scores = record && record.scores ? JSON.parse(record.scores) : {};
-            if(!scores[sid]) scores[sid] = [];
-
-            const ed = window.state.editEkstraData;
-            if (ed && ed.scoreId) {
-                if(ed.studentId !== sid && scores[ed.studentId]) scores[ed.studentId] = scores[ed.studentId].filter(s => s.id !== ed.scoreId);
-                else scores[sid] = scores[sid].filter(s => s.id !== ed.scoreId);
-                scores[sid].push({ id: ed.scoreId, kegiatan: keg, nilai: nil, keterangan: ket, date: window.getToday() });
-                window.showToast('Penilaian Ekstra diperbarui!');
-            } else {
-                scores[sid].push({ id: window.generateId(), kegiatan: keg, nilai: nil, keterangan: ket, date: window.getToday() });
-                window.showToast('Penilaian Ekstra disimpan!');
-            }
-            
-            let data = record || { id: recordId, teacherId: window.state.selectedTeacherId, type: 'ekstra', month: month, aspects: '[]', status: 'Menunggu' };
-            data.scores = JSON.stringify(scores);
-            
-            await window.saveToCloud('penilaian', recordId, data, true);
-            window.state.editEkstraData = null; window.renderApp();
-        };
-
-        window.deleteEkstraScore = async (recordId, studentId, scoreId) => {
-            if(!confirm('Hapus rekap nilai ini?')) return;
-            let record = window.localDb.penilaian.find(p => p.id === recordId); if(!record) return;
-            let scores = JSON.parse(record.scores || '{}');
-            if(scores[studentId]) {
-                scores[studentId] = scores[studentId].filter(s => s.id !== scoreId);
-                record.scores = JSON.stringify(scores);
-                await window.saveToCloud('penilaian', recordId, record, true); window.renderApp();
-            }
         };
 
         window.deleteMapel = async (recordId, mapelName) => {
@@ -1108,8 +1073,6 @@
 
             const success = await window.saveToCloud(col, id, dataObj, false);
             if(success) {
-                // PERBAIKAN BUG 1: Menghapus duplikasi manual .push() ke localDb 
-                // karena fungsi saveToCloud sudah secara otomatis menangani pembaruan state lokal
                 window.closeModal('modal-add-folder'); document.getElementById('ex-folder-name').value = '';
                 window.showToast('Folder berhasil dibuat!'); window.renderApp();
             }
@@ -1155,7 +1118,6 @@
 
                 const success = await window.saveToCloud(col, id, dataObj, false);
                 if (success) {
-                    // PERBAIKAN BUG 1: Menghapus duplikasi manual .push() ke localDb
                     window.closeModal('modal-add-file');
                     window.showToast('File berhasil diunggah dan disimpan!');
                     window.renderApp();
@@ -1173,42 +1135,11 @@
             }
         };
 
-        window.savePenilaianConfig = async (e) => {
-            e.preventDefault();
-            const pTab = window.state.penilaianSubView || 'bulanan';
-            let month = pTab === 'semesteran' ? (window.state.penilaianSemester || '1') : (window.state.penilaianMonth || window.getToday().substring(0,7));
-            
-            let record = window.localDb.penilaian.find(p => p?.teacherId === window.state.selectedTeacherId && p?.type === pTab && p?.month === month);
-            let id = record ? record.id : window.generateId();
-            
-            if (['bulanan', 'semesteran'].includes(pTab)) {
-                const mapelInput = document.getElementById('penilaian-mapel');
-                const mapel = mapelInput?.value.trim();
-                
-                if (!mapel) return window.showToast('Nama Mapel tidak boleh kosong!', 'error');
-
-                let aspects = [];
-                if (record && record.aspects && JSON.parse(record.aspects).length > 0) { aspects = JSON.parse(record.aspects); } 
-                else { aspects = ['Bahasa Indonesia', 'Matematika', 'IPAS', 'Pend. Pancasila', 'PJOK', 'Agama']; }
-                
-                if(!aspects.includes(mapel)) { aspects.push(mapel); } 
-                else { return window.showToast(`Mapel '${mapel}' sudah ada di tabel.`, 'error'); }
-                
-                let data = record || { id, teacherId: window.state.selectedTeacherId, type: pTab, month: month, scores: '{}', status: 'Menunggu' };
-                data.aspects = JSON.stringify(aspects);
-                
-                if(await window.saveToCloud('penilaian', id, data)) { 
-                    window.closeModal('add-penilaian-modal'); mapelInput.value = '';
-                    window.showToast(`Kolom ${mapel} berhasil ditambahkan.`); window.renderApp(); 
-                }
-            }
-        };
-
         // --- FUNGSI BARU UNTUK QUICK NOTE HP & SIDE PANEL ---
         window.saveQuickNote = async () => {
             const textInput = document.getElementById('qn-input-text');
-            const text = textInput.value.trim();
-            if (!text) return window.showToast('Catatan tidak boleh kosong!', 'error');
+            const raw_text = textInput.value.trim();
+            if (!raw_text) return window.showToast('Catatan tidak boleh kosong!', 'error');
 
             const id = window.generateId();
             const targetUid = window.state.selectedTeacherId || window.state.currentUser.id;
@@ -1218,12 +1149,78 @@
             const pad = (n) => String(n).padStart(2, '0');
             const created_at = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 
+            // ==========================================
+            // TEXT PARSER ENGINE: Ekstrak Entitas dari Teks
+            // ==========================================
+            let student_id = null;
+            let student_name = null;
+            let subject = null;
+            let score = null;
+            let predicate = null;
+
+            const students = window.localDb.students || [];
+            let matchedStudent = null;
+            
+            // 1. Cari Nama Siswa berdasarkan data lokal kelas ini
+            for (let s of students) {
+                let sFirstName = (s.name || '').split(' ')[0].toLowerCase();
+                // Menggunakan boundary \b agar cocok tepat dengan kata utuh
+                let nameRegex = new RegExp('\\b' + window.escapeRegExp(sFirstName) + '\\b', 'i');
+                if (nameRegex.test(raw_text)) {
+                    matchedStudent = s;
+                    break;
+                }
+            }
+
+            if (matchedStudent) {
+                student_id = matchedStudent.id;
+                student_name = matchedStudent.name;
+            }
+
+            // 2. Cari Nilai (Deteksi Angka Puluhan/Ratusan: 10 - 100)
+            const scoreMatch = raw_text.match(/\b(100|[1-9][0-9])\b/);
+            if (scoreMatch) {
+                score = parseInt(scoreMatch[0], 10);
+            }
+
+            // 3. Cari Predikat (Deteksi Keyword Standar SLB/Umum)
+            const predicateMatch = raw_text.match(/\b(BSB|BSH|MB|BB|Sangat Baik|Baik|Cukup|Kurang|A|B|C|D)\b/i);
+            if (predicateMatch) {
+                predicate = predicateMatch[0].toUpperCase();
+            }
+
+            // 4. Cari Mapel / Kegiatan (Sisa kata dari teks asli)
+            let subjectStr = raw_text;
+            if (matchedStudent) {
+                let nameRegex = new RegExp('\\b' + window.escapeRegExp(matchedStudent.name.split(' ')[0]) + '\\b', 'i');
+                subjectStr = subjectStr.replace(nameRegex, '');
+            }
+            if (score !== null) subjectStr = subjectStr.replace(new RegExp('\\b' + score + '\\b'), '');
+            if (predicate !== null) subjectStr = subjectStr.replace(new RegExp('\\b' + window.escapeRegExp(predicate) + '\\b', 'i'), '');
+            
+            // Bersihkan sisa kata hubung / noise words
+            subjectStr = subjectStr.replace(/\b(nilai|predikat|mendapat|dapat|skor|pada|kegiatan|pelajaran|hari|ini)\b/gi, '');
+            
+            // Format akhir string Mapel/Kegiatan
+            subject = subjectStr.replace(/[^a-zA-Z0-9\s.,-]/g, '').trim().replace(/\s+/g, ' ');
+            if (subject.length > 80) subject = subject.substring(0, 80) + '...'; 
+            if (!subject || subject === '') subject = null;
+
+            // ==========================================
+
             const dataObj = {
                 id: id,
                 teacherId: targetUid,
-                catatan: text,
-                created_at: created_at,
-                tanggal: created_at.substring(0, 10) // Cache untuk filter mudah
+                teacher_id: targetUid,
+                student_id: student_id || null, // NULL eksplisit agar tidak merusak Foreign Key jika gagal deteksi
+                student_name: student_name,
+                subject: subject,
+                score: score,
+                predicate: predicate,
+                raw_text: raw_text,
+                catatan: raw_text, // Kompatibilitas untuk fallback ke UI versi lama
+                tanggal: created_at.substring(0, 10),
+                created_at: created_at
             };
 
             const btn = document.getElementById('qn-btn-save');
@@ -1242,16 +1239,38 @@
             // Antre simpan ke cloud
             window.qnQueue = window.qnQueue.then(async () => {
                 try {
-                    const success = await window.saveToCloud('jurnalHarianCepat', id, dataObj, true);
-                    if(success) {
-                        const inputEl = document.getElementById('qn-input-text');
-                        if (inputEl) inputEl.value = '';
-                        window.showToast('Catatan cepat tersimpan!');
-                    } else { throw new Error("Gagal cloud"); }
+                    // MENGGUNAKAN .insert() STANDAR UNTUK MENGHINDARI ERROR 404
+                    const dbPayload = {
+                        id: id,
+                        teacher_id: targetUid,
+                        student_id: student_id || null,
+                        student_name: student_name,
+                        subject: subject,
+                        score: score,
+                        predicate: predicate,
+                        raw_text: raw_text,
+                        catatan: raw_text,
+                        tanggal: created_at.substring(0, 10),
+                        created_at: created_at
+                    };
+
+                    const { data, error } = await window.supabaseClient
+                        .from('jurnal_harian_cepat')
+                        .insert([dbPayload]);
+                        
+                    if (error) {
+                        console.warn("Kesalahan DB Insert:", error.message);
+                        throw error;
+                    }
+                    
+                    const inputEl = document.getElementById('qn-input-text');
+                    if (inputEl) inputEl.value = '';
+                    window.showToast('Catatan cepat tersimpan & dianalisis!');
                 } catch(err) {
+                    // Rollback lokal jika cloud gagal
                     window.localDb.jurnalHarianCepat = window.localDb.jurnalHarianCepat.filter(x => x.id !== id);
                     if (window.state.currentView === 'penilaian' && window.state.penilaianSubView === 'quickNote') window.renderApp();
-                    window.showToast('Gagal menyimpan catatan cepat.', 'error');
+                    window.showToast('Gagal menyimpan catatan cepat: ' + err.message, 'error');
                 } finally {
                     const checkBtn = document.getElementById('qn-btn-save');
                     if (checkBtn) { checkBtn.innerHTML = origHTML; checkBtn.disabled = false; }
@@ -1300,9 +1319,10 @@
             const safeFirstName = window.escapeRegExp(firstName);
 
             const notes = (window.localDb.jurnalHarianCepat || []).filter(n => {
-                return n.teacherId === targetUid && 
+                const textToCheck = n.raw_text || n.catatan || '';
+                return (n.teacherId === targetUid || n.teacher_id === targetUid) && 
                        (n.tanggal || '').startsWith(month) &&
-                       (n.catatan.toLowerCase().includes(studentName) || n.catatan.toLowerCase().includes(firstName));
+                       (textToCheck.toLowerCase().includes(studentName) || textToCheck.toLowerCase().includes(firstName));
             }).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
             if (notes.length === 0) {
@@ -1312,13 +1332,21 @@
 
             container.innerHTML = notes.map(n => {
                 const regex = new RegExp(`(${safeFirstName})`, 'gi');
-                const highlightedText = n.catatan.replace(regex, '<span class="bg-amber-200 text-amber-900 font-bold px-1 rounded">$1</span>');
+                const rawText = n.raw_text || n.catatan || '';
+                const highlightedText = rawText.replace(regex, '<span class="bg-amber-200 text-amber-900 font-bold px-1 rounded">$1</span>');
                 
                 return `
-                <div class="bg-white p-3 rounded-xl shadow-sm border border-slate-200 relative group">
-                    <p class="text-[10px] text-slate-400 font-bold mb-1"><i class="fas fa-clock mr-1"></i> ${n.created_at}</p>
-                    <p class="text-sm text-slate-700 whitespace-pre-wrap">${highlightedText}</p>
-                    <button onclick="navigator.clipboard.writeText('${n.catatan.replace(/'/g, "\\'")}'); window.showToast('Disalin ke clipboard!', 'info')" class="absolute top-2 right-2 text-slate-300 hover:text-indigo-500 transition opacity-0 group-hover:opacity-100 bg-white rounded shadow-sm px-2 py-1 text-xs"><i class="fas fa-copy"></i></button>
+                <div class="bg-white p-3 rounded-xl shadow-sm border border-slate-200 relative group transition hover:border-indigo-300">
+                    <div class="flex justify-between items-start mb-1">
+                        <p class="text-[10px] text-slate-400 font-bold"><i class="fas fa-clock mr-1"></i> ${n.created_at.split(' ')[1] || n.created_at}</p>
+                        <div class="flex gap-1">
+                            ${n.score ? `<span class="bg-emerald-100 text-emerald-700 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">Nilai: ${n.score}</span>` : ''}
+                            ${n.predicate ? `<span class="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">Pred: ${n.predicate}</span>` : ''}
+                        </div>
+                    </div>
+                    ${n.subject ? `<p class="text-[10px] font-bold text-slate-500 mb-1">Topik: <span class="font-normal text-slate-700">${n.subject}</span></p>` : ''}
+                    <p class="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed mt-1">${highlightedText}</p>
+                    <button onclick="navigator.clipboard.writeText('${rawText.replace(/'/g, "\\'")}'); window.showToast('Disalin ke clipboard!', 'info')" class="absolute top-2 right-2 text-slate-300 hover:text-indigo-500 transition opacity-0 group-hover:opacity-100 bg-white rounded shadow-sm px-2 py-1 text-xs"><i class="fas fa-copy"></i></button>
                 </div>`;
             }).join('');
         };
@@ -1808,7 +1836,7 @@
                     if (subView === 'quickNote') {
                         const selMonth = window.state.attMonth || today.substring(0,7);
                         const notes = (window.localDb.jurnalHarianCepat || [])
-                                      .filter(n => n.teacherId === targetUid && (n.tanggal || '').startsWith(selMonth))
+                                      .filter(n => (n.teacherId === targetUid || n.teacher_id === targetUid) && (n.tanggal || '').startsWith(selMonth))
                                       .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
                         contentHTML = `
@@ -1822,8 +1850,8 @@
                             <div class="bg-white p-4 rounded-3xl shadow-lg shadow-indigo-100/50 border border-slate-100 mb-6 shrink-0 z-10 relative overflow-hidden">
                                 <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
                                 <label class="block text-xs font-bold text-indigo-600 mb-2 flex items-center"><i class="fas fa-pen-alt mr-2"></i> Ketik Catatan / Nilai Hari Ini</label>
-                                <textarea id="qn-input-text" rows="4" placeholder="Contoh: 5 Sep - Rizky B.Indo 80 menyimak. Budi progsus bina diri 85 sudah mandiri..." class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:border-indigo-500 focus:bg-white outline-none transition-colors custom-scrollbar mb-3 leading-relaxed"></textarea>
-                                <button id="qn-btn-save" onclick="window.saveQuickNote()" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black py-3.5 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 text-sm flex items-center justify-center gap-2"><i class="fas fa-paper-plane"></i> Simpan Catatan</button>
+                                <textarea id="qn-input-text" rows="4" placeholder="Ketik format bebas. Cth: Zahim pramuka BSB atau Varo B.Indo 80" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:border-indigo-500 focus:bg-white outline-none transition-colors custom-scrollbar mb-3 leading-relaxed"></textarea>
+                                <button id="qn-btn-save" onclick="window.saveQuickNote()" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black py-3.5 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 text-sm flex items-center justify-center gap-2"><i class="fas fa-paper-plane"></i> Simpan & Analisis Teks</button>
                             </div>` : `<div class="bg-amber-50 text-amber-700 p-4 rounded-2xl border border-amber-200 text-sm font-bold text-center mb-6"><i class="fas fa-lock mr-2"></i> Mode Lihat Saja (Super Admin)</div>`}
 
                             <div class="flex-1 flex flex-col min-h-0 bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden relative z-0">
@@ -1837,9 +1865,18 @@
                                       <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative group transition-all hover:border-indigo-300">
                                           <div class="flex justify-between items-start mb-2">
                                               <span class="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100"><i class="fas fa-calendar-day mr-1"></i> ${n.tanggal}</span>
-                                              <span class="text-[10px] font-bold text-slate-400"><i class="fas fa-clock mr-1"></i> ${n.created_at.split(' ')[1]}</span>
+                                              <span class="text-[10px] font-bold text-slate-400"><i class="fas fa-clock mr-1"></i> ${n.created_at.split(' ')[1] || n.created_at}</span>
                                           </div>
-                                          <p class="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">${n.catatan}</p>
+                                          
+                                          ${n.student_name ? `<p class="text-xs font-bold text-slate-800 mb-1.5"><i class="fas fa-user-graduate text-indigo-400 mr-1.5"></i> ${n.student_name}</p>` : ''}
+                                          ${(n.score || n.predicate || n.subject) ? `
+                                          <div class="flex gap-2 mb-3 flex-wrap">
+                                              ${n.subject ? `<span class="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200"><i class="fas fa-book-open mr-1"></i> ${n.subject}</span>` : ''}
+                                              ${n.score ? `<span class="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-200"><i class="fas fa-check-circle mr-1"></i> Nilai: ${n.score}</span>` : ''}
+                                              ${n.predicate ? `<span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-200"><i class="fas fa-star mr-1"></i> Predikat: ${n.predicate}</span>` : ''}
+                                          </div>` : ''}
+                                          
+                                          <p class="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed border-t border-slate-100 pt-2">${n.raw_text || n.catatan}</p>
                                           ${!readOnly ? `<button onclick="window.deleteFileItem('jurnalHarianCepat', '${n.id}', 'Catatan')" class="absolute -top-2 -right-2 w-7 h-7 bg-rose-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition shadow-md"><i class="fas fa-times text-xs"></i></button>` : ''}
                                       </div>
                                       `).join('')}
