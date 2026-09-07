@@ -731,34 +731,48 @@
             }
         };
 
-        // --- FUNGSI BARU UNTUK ABSENSI CLOUD EKSPLISIT ---
+        // --- PERBAIKAN FINAL FUNGSI ABSENSI (ANTI-ERROR & FALLBACK GANDA) ---
         window.saveAttendance = async (dataObj) => {
             try {
-                const payload = {
+                // Percobaan 1: Menggunakan format camelCase (Standar tabel awal Supabase Anda)
+                let payload = {
                     id: dataObj.id,
-                    teacherId: dataObj.teacherId, // camelCase format memory
-                    student_id: dataObj.studentId || null, // Format untuk DB Cloud Table
+                    teacherId: dataObj.teacherId, 
+                    studentId: dataObj.studentId || dataObj.student_id,
                     date: dataObj.date,
                     status: dataObj.status
                 };
 
-                const { data, error } = await window.supabaseClient
+                let { data, error } = await window.supabaseClient
                     .from('attendance')
                     .upsert(payload, { onConflict: 'id' })
                     .select();
 
-                if (error && error.message && error.message.includes('does not exist')) {
-                     console.warn("Mencoba fallback skema kolom absensi...", error);
-                     let altData = { ...payload, studentId: payload.student_id };
-                     delete altData.student_id; // Coba format kolom lama jika student_id tidak dikenali
-                     const retry = await window.supabaseClient.from('attendance').upsert(altData, { onConflict: 'id' }).select();
-                     if (retry.error) throw retry.error;
+                // Percobaan 2: Jika error karena kolom camelCase tidak ada (PGRST204)
+                if (error && (error.code === 'PGRST204' || (error.message && error.message.includes('Could not find')))) {
+                    console.warn("Kolom camelCase tidak ditemukan. Mencoba fallback ke snake_case...");
+                    let altPayload = {
+                        id: dataObj.id,
+                        teacher_id: dataObj.teacherId,
+                        student_id: dataObj.studentId || dataObj.student_id,
+                        date: dataObj.date,
+                        status: dataObj.status
+                    };
+                    
+                    const retry = await window.supabaseClient
+                        .from('attendance')
+                        .upsert(altPayload, { onConflict: 'id' })
+                        .select();
+                        
+                    if (retry.error) throw retry.error;
+                    return true;
                 } else if (error) {
                     throw error;
                 }
+                
                 return true;
             } catch (err) {
-                console.error("Gagal saveAttendance:", err);
+                console.error("Supabase Save Error:", err.message || err);
                 throw err;
             }
         };
@@ -770,7 +784,7 @@
                     element.classList.add('opacity-50', 'animate-pulse');
                 }
 
-                let existing = window.localDb.attendance.find(a => a.studentId === studentId && a.date === date);
+                let existing = window.localDb.attendance.find(a => (a.studentId === studentId || a.student_id === studentId) && a.date === date);
                 let teacherId = window.state.selectedTeacherId || window.state.currentUser.id;
                 
                 if (!status || status === "") {
@@ -778,37 +792,44 @@
                         window.localDb.attendance = window.localDb.attendance.filter(a => a.id !== existing.id);
                         window.recalcAttendanceTotals(studentId);
                         
+                        // Hapus dari cloud
                         window.attendanceQueue = window.attendanceQueue.then(async () => {
                             try {
                                 const { error } = await window.supabaseClient.from('attendance').delete().eq('id', existing.id);
                                 if (error) throw error;
                             } catch (err) {
-                                console.error("Gagal hapus absensi dari server:", err);
+                                console.error("Gagal hapus absensi:", err);
                                 window.localDb.attendance.push(existing); 
                                 window.recalcAttendanceTotals(studentId);
                                 if(window.state.currentView === 'attendance') window.renderApp();
                             }
                         });
                     }
-                    if (element) { element.disabled = false; element.classList.remove('opacity-50', 'animate-pulse', 'text-rose-500'); }
+                    if (element) { 
+                        element.disabled = false; 
+                        element.classList.remove('opacity-50', 'animate-pulse', 'text-rose-500'); 
+                    }
                     return; 
                 }
                 
                 let id = existing ? existing.id : window.generateId();
                 let dataObj = { id, teacherId, studentId, date, status };
                 
+                // Update Lokal Langsung agar UI Responsif
                 const idx = window.localDb.attendance.findIndex(a => a.id === id);
                 if(idx > -1) window.localDb.attendance[idx] = dataObj;
                 else window.localDb.attendance.push(dataObj);
 
                 window.recalcAttendanceTotals(studentId);
                 
-                // Panggil saveAttendance spesifik
+                // Queueing Penyimpanan ke Supabase
                 window.attendanceQueue = window.attendanceQueue.then(async () => {
                     try {
                         await window.saveAttendance(dataObj);
                     } catch (err) {
-                        window.showToast('Gagal sinkronisasi absensi ke server. Memencet terlalu cepat!', 'error');
+                        console.error("Gagal melakukan sinkronisasi:", err);
+                        window.showToast('Gagal sinkronisasi absensi ke server. Periksa jaringan!', 'error');
+                        
                         if (element) {
                             element.classList.add('text-rose-500');
                             let val = '';
@@ -827,7 +848,7 @@
                 
                 if (element) {
                     element.disabled = false;
-                    element.classList.remove('opacity-50', 'animate-pulse', 'text-rose-500');
+                    element.classList.remove('opacity-50', 'animate-pulse');
                 }
             } catch (error) {
                 console.error("Attendance Update Error:", error);
@@ -835,10 +856,11 @@
                 if (element) { element.disabled = false; element.classList.remove('opacity-50', 'animate-pulse'); }
             }
         };
+        // --------------------------------------------------------------
 
         window.recalcAttendanceTotals = (studentId) => {
             const selMonth = window.state.attMonth || window.getToday().substring(0,7);
-            const attList = window.localDb.attendance.filter(a => a?.studentId === studentId && (a?.date||'').startsWith(selMonth));
+            const attList = window.localDb.attendance.filter(a => (a?.studentId === studentId || a?.student_id === studentId) && (a?.date||'').startsWith(selMonth));
             let counts = { Hadir: 0, Sakit: 0, Izin: 0, Alpa: 0, Libur: 0 };
             attList.forEach(a => { if (counts[a.status] !== undefined) counts[a.status]++; });
             
@@ -890,6 +912,7 @@
                 window.state.stimulasiRows = temp;
             }
         };
+        
         window.addStimRow = () => { window.saveCurrentStimRows(); if(!window.state.stimulasiRows) window.state.stimulasiRows = []; window.state.stimulasiRows.push({program: '', aktivitas: ''}); window.renderApp(); };
         window.removeStimRow = (idx) => { window.saveCurrentStimRows(); window.state.stimulasiRows.splice(idx, 1); window.renderApp(); };
         
@@ -1484,7 +1507,7 @@
                                     <div class="flex gap-4 items-center mb-5">
                                         <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center font-black text-2xl shadow-inner shrink-0">${(s?.name||'?').charAt(0).toUpperCase()}</div>
                                         <div class="flex-1 pr-12">
-                                            <h4 class="font-black text-slate-800 text-base leading-tight mb-1 truncate">${s?.name||'-'}</h4>
+                                            <h4 class="font-bold text-slate-800 text-base leading-tight mb-1 truncate">${s?.name||'-'}</h4>
                                             <p class="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1"><i class="fas fa-id-card text-slate-400 mr-1"></i> NISN: ${s?.nisn||'-'}</p>
                                             <span class="inline-block bg-indigo-50 text-indigo-700 text-[9px] font-bold px-2 py-0.5 rounded uppercase border border-indigo-100"><i class="fas fa-tag mr-1"></i> ${s?.condition||'Umum'}</span>
                                         </div>
@@ -1624,7 +1647,7 @@
                     const daysInMonth = new Date(year, month, 0).getDate();
                     
                     const targetStudentIds = targetStudents.map(s => s.id);
-                    const attList = window.localDb.attendance.filter(a => targetStudentIds.includes(a.studentId) && (a.date||'').startsWith(selMonth));
+                    const attList = window.localDb.attendance.filter(a => targetStudentIds.includes(a.studentId || a.student_id) && (a.date||'').startsWith(selMonth));
                     
                     let tableHtml = `<table class="w-full text-sm print-table border-collapse min-w-max">
                         <thead>
@@ -1643,7 +1666,7 @@
                             
                             for(let i = 1; i <= daysInMonth; i++) {
                                 let dateStr = `${selMonth}-${String(i).padStart(2,'0')}`;
-                                let record = attList.find(a => a.studentId === s.id && a.date === dateStr);
+                                let record = attList.find(a => (a.studentId === s.id || a.student_id === s.id) && a.date === dateStr);
                                 let status = record ? record.status : '';
                                 if (counts[status] !== undefined) counts[status]++;
                                 
