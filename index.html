@@ -47,7 +47,6 @@
 </head>
 <body class="text-slate-800 h-screen overflow-hidden flex">
     
-    <!-- SIDEBAR -->
     <aside id="sidebar" class="w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 no-print z-30 shadow-[4px_0_24px_rgba(0,0,0,0.02)] relative">
         <div class="p-4">
             <div class="flex items-center gap-3 mb-6 px-2">
@@ -82,7 +81,6 @@
         </div>
     </aside>
 
-    <!-- MAIN APP WRAPPER -->
     <div id="app-container" class="flex-1 flex flex-col h-screen overflow-hidden relative hidden bg-slate-50">
         <!-- Admin Banner -->
         <div id="superadmin-banner" class="w-full no-print hidden"></div>
@@ -251,7 +249,6 @@
         </div>
     </div>
 
-    <!-- SCRIPT LOGIC -->
     <script>
         const supabaseUrl = 'https://enmaccvxqdchenccoigm.supabase.co';
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVubWFjY3Z4cWRjaGVuY2NvaWdtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NTYyNzcsImV4cCI6MjA5OTAzMjI3N30.6n9DB6-aTRyp5I19DzWhlsOPOEONY4Tt2c9n6Vh-Vow';
@@ -534,23 +531,54 @@
                 
                 await Promise.all(tables.map(async (t) => {
                     try {
-                        let { data, error } = await window.supabaseClient.from(t.db).select('*').order('id', { ascending: true }).limit(10000);
-                        if (error && t.db !== t.memory) {
-                             const fallback = await window.supabaseClient.from(t.memory).select('*');
-                             data = fallback.data; error = fallback.error;
-                        }
-                        if (!error) {
-                            let mappedData = data || [];
-                            if (t.memory === 'attendance') {
-                                mappedData = mappedData.map(item => ({
-                                    ...item,
-                                    studentId: item.studentId || item.student_id,
-                                    teacherId: item.teacherId || item.teacher_id
-                                }));
+                        let allData = [];
+                        let hasMore = true;
+                        let offset = 0;
+                        const pageSize = 1000;
+                        
+                        // Loop penarikan data untuk menembus batas 1000 rows dari Supabase
+                        while(hasMore) {
+                            let { data, error } = await window.supabaseClient
+                                .from(t.db)
+                                .select('*')
+                                .range(offset, offset + pageSize - 1);
+
+                            if (error && t.db !== t.memory) {
+                                 const fallback = await window.supabaseClient.from(t.memory).select('*').range(offset, offset + pageSize - 1);
+                                 data = fallback.data; error = fallback.error;
                             }
-                            window.localDb[t.memory] = mappedData;
-                            if (t.memory === 'materials') window.localDb['berkasGuru'] = JSON.parse(JSON.stringify(mappedData));
+                            
+                            if (!error && data) {
+                                allData = [...allData, ...data];
+                                if (data.length < pageSize) hasMore = false;
+                                else offset += pageSize;
+                            } else {
+                                hasMore = false;
+                            }
                         }
+
+                        let mappedData = allData || [];
+                        
+                        // Mapping Khusus Absensi
+                        if (t.memory === 'attendance') {
+                            mappedData = mappedData.map(item => ({
+                                ...item,
+                                studentId: item.studentId || item.student_id,
+                                teacherId: item.teacherId || item.teacher_id
+                            }));
+                            
+                            // Filter Duplikat Lokal (Ambil data paling akhir/terbaru per siswa per hari)
+                            const uniqueAtt = new Map();
+                            mappedData.forEach(item => {
+                                const sId = item.studentId || item.student_id;
+                                uniqueAtt.set(`${sId}_${item.date}`, item);
+                            });
+                            mappedData = Array.from(uniqueAtt.values());
+                        }
+                        
+                        window.localDb[t.memory] = mappedData;
+                        if (t.memory === 'materials') window.localDb['berkasGuru'] = JSON.parse(JSON.stringify(mappedData));
+                        
                     } catch (err) { console.warn(`Error narik tabel ${t.memory}:`, err.message); }
                 }));
 
@@ -747,19 +775,57 @@
             }
         };
 
-        // =========================================================================
-        // LOGIKA & MODUL UTAMA APLIKASI MENU ABSENSI
-        // =========================================================================
+        window.getPendingAttendance = () => {
+            try { return JSON.parse(localStorage.getItem('pending_attendance') || '[]'); } 
+            catch { return []; }
+        };
+
+        window.saveToOfflineQueue = (item) => {
+            let pending = window.getPendingAttendance();
+            pending = pending.filter(p => !(p.studentId === item.studentId && p.date === item.date));
+            pending.push(item);
+            localStorage.setItem('pending_attendance', JSON.stringify(pending));
+            window.state.hasUnsyncedData = true; 
+            window.syncVisualAttendance();
+        };
+
+        window.removeFromOfflineQueue = (studentId, date) => {
+            let pending = window.getPendingAttendance();
+            pending = pending.filter(p => !(p.studentId === studentId && p.date === date));
+            localStorage.setItem('pending_attendance', JSON.stringify(pending));
+            if(pending.length === 0) window.state.hasUnsyncedData = false;
+            window.syncVisualAttendance();
+        };
+        
+        window.clearOfflineQueue = () => {
+            localStorage.removeItem('pending_attendance');
+            window.state.hasUnsyncedData = false;
+            window.syncVisualAttendance();
+        };
+
+        window.syncVisualAttendance = () => {
+            const el = document.getElementById('att-sync-status');
+            if (el) {
+                if (window.isSavingAttendance) {
+                    el.innerHTML = '<i class="fas fa-spinner fa-spin text-amber-500 mr-2"></i> Menyimpan...';
+                    el.classList.remove('border-amber-300', 'bg-amber-50'); el.classList.add('border-slate-200', 'bg-white');
+                } else if (window.state.hasUnsyncedData) {
+                    el.innerHTML = '<i class="fas fa-exclamation-triangle text-amber-500 mr-2"></i> Tersimpan Offline (Belum Sinkron)';
+                    el.classList.add('border-amber-300', 'bg-amber-50'); el.classList.remove('border-slate-200', 'bg-white');
+                } else {
+                    el.innerHTML = '<i class="fas fa-cloud text-emerald-500 mr-2"></i> Semua Aman di Cloud';
+                    el.classList.remove('border-amber-300', 'bg-amber-50'); el.classList.add('border-slate-200', 'bg-white');
+                }
+            }
+        };
+
         window.updateAttendance = async (studentId, date, status) => {
             if (!window.state?.currentUser) return;
             try {
-                let existingIdx = window.localDb.attendance.findIndex(a => 
-                    (a.studentId === studentId || a.student_id === studentId) && a.date === date
-                );
+                let existingIdx = window.localDb.attendance.findIndex(a => (a.studentId === studentId || a.student_id === studentId) && a.date === date);
                 let existing = existingIdx > -1 ? window.localDb.attendance[existingIdx] : null;
                 let teacherId = window.state.selectedTeacherId || window.state.currentUser.id;
                 
-                // Kasus 1: Opsi dikosongkan (Batal Absen/Reset)
                 if (!status || status === "") {
                     if (existing) {
                         window.localDb.attendance.splice(existingIdx, 1);
@@ -769,26 +835,21 @@
                     return; 
                 }
                 
-                // Kasus 2: Update / Insert Presensi Baru
                 let id = existing ? existing.id : window.generateId();
                 let dataObj = { id, teacherId, teacher_id: teacherId, studentId, student_id: studentId, date, status };
                 
-                // Update Memori Lokal terlebih dahulu (Optimistic UI)
-                if (existingIdx > -1) window.localDb.attendance[existingIdx] = dataObj;
+                if(existingIdx > -1) window.localDb.attendance[existingIdx] = dataObj;
                 else window.localDb.attendance.push(dataObj);
                 
                 window.isSavingAttendance = true;
                 window.syncVisualAttendance();
 
-                // Kirim Payload dalam Format Snake_case ke Supabase
                 const payload = { id: id, teacher_id: teacherId, student_id: studentId, date: date, status: status };
                 const { error } = await window.supabaseClient.from('attendance').upsert(payload, { onConflict: 'id' });
 
                 if (error) {
-                    // Jika Gagal (Jaringan Offline), Masukkan ke Offline Antrean LocalStorage
                     window.saveToOfflineQueue(dataObj);
                 } else {
-                    // Jika Berhasil, Hapus dari Antrean Offline (jika ada)
                     window.removeFromOfflineQueue(studentId, date);
                 }
             } catch (error) {
@@ -797,28 +858,6 @@
                 window.isSavingAttendance = false;
                 window.syncVisualAttendance();
             }
-        };
-
-        window.recalcAttendanceTotals = (studentId) => {
-            const selMonth = window.state.attMonth || window.getToday().substring(0, 7);
-            const attList = window.localDb.attendance.filter(a => 
-                (a?.studentId === studentId || a?.student_id === studentId) && 
-                (a?.date || '').startsWith(selMonth)
-            );
-            
-            let counts = { Hadir: 0, Sakit: 0, Izin: 0, Alpa: 0, Libur: 0 };
-            attList.forEach(a => { if (counts[a.status] !== undefined) counts[a.status]++; });
-            
-            ['H', 'S', 'I', 'A', 'L'].forEach(k => {
-                const el = document.getElementById(`tot-${k}-${studentId}`);
-                if (el) {
-                    if (k === 'H') el.innerText = counts.Hadir;
-                    if (k === 'S') el.innerText = counts.Sakit;
-                    if (k === 'I') el.innerText = counts.Izin;
-                    if (k === 'A') el.innerText = counts.Alpa;
-                    if (k === 'L') el.innerText = counts.Libur;
-                }
-            });
         };
 
         window.saveAllAttendance = async (isBackground = false) => {
@@ -841,55 +880,33 @@
                 const { error } = await window.supabaseClient.from('attendance').upsert(payloadSnake, { onConflict: 'id' });
                 if (error) throw error;
 
-                // Bersihkan Antrean Offline jika sukses
                 localStorage.removeItem('pending_attendance');
                 window.state.hasUnsyncedData = false;
-                
-                if (!isBackground) window.showToast('Seluruh data absensi berhasil tersimpan ke Cloud!', 'success');
-            } catch (e) {
-                if (!isBackground) window.showToast('Gagal terhubung ke Cloud. Tersimpan offline.', 'error');
+                if(!isBackground) window.showToast('Seluruh data absensi berhasil tersimpan ke Cloud!', 'success');
+            } catch(e) {
+                if(!isBackground) window.showToast('Gagal terhubung ke Cloud. Tersimpan offline.', 'error');
             } finally {
                 window.isSavingAttendance = false; 
                 window.syncVisualAttendance();
             }
         };
 
-        window.getPendingAttendance = () => {
-            try { return JSON.parse(localStorage.getItem('pending_attendance') || '[]'); } 
-            catch { return []; }
-        };
-
-        window.saveToOfflineQueue = (item) => {
-            let pending = window.getPendingAttendance();
-            pending = pending.filter(p => !(p.studentId === item.studentId && p.date === item.date));
-            pending.push(item);
-            localStorage.setItem('pending_attendance', JSON.stringify(pending));
-            window.state.hasUnsyncedData = true; 
-            window.syncVisualAttendance();
-        };
-
-        window.removeFromOfflineQueue = (studentId, date) => {
-            let pending = window.getPendingAttendance();
-            pending = pending.filter(p => !(p.studentId === studentId && p.date === date));
-            localStorage.setItem('pending_attendance', JSON.stringify(pending));
-            if (pending.length === 0) window.state.hasUnsyncedData = false;
-            window.syncVisualAttendance();
-        };
-
-        window.syncVisualAttendance = () => {
-            const el = document.getElementById('att-sync-status');
-            if (el) {
-                if (window.isSavingAttendance) {
-                    el.innerHTML = '<i class="fas fa-spinner fa-spin text-amber-500 mr-2"></i> Menyimpan...';
-                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-slate-200 bg-white text-slate-600";
-                } else if (window.state.hasUnsyncedData) {
-                    el.innerHTML = '<i class="fas fa-exclamation-triangle text-amber-500 mr-2"></i> Tersimpan Offline (Belum Sinkron)';
-                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-amber-300 bg-amber-50 text-amber-700";
-                } else {
-                    el.innerHTML = '<i class="fas fa-cloud text-emerald-500 mr-2"></i> Semua Aman di Cloud';
-                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-slate-200 bg-white text-slate-600";
+        window.recalcAttendanceTotals = (studentId) => {
+            const selMonth = window.state.attMonth || window.getToday().substring(0,7);
+            const attList = window.localDb.attendance.filter(a => (a?.studentId === studentId || a?.student_id === studentId) && (a?.date||'').startsWith(selMonth));
+            let counts = { Hadir: 0, Sakit: 0, Izin: 0, Alpa: 0, Libur: 0 };
+            attList.forEach(a => { if (counts[a.status] !== undefined) counts[a.status]++; });
+            
+            ['H','S','I','A','L'].forEach(k => {
+                const el = document.getElementById(`tot-${k}-${studentId}`);
+                if(el) {
+                    if(k==='H') el.innerText = counts.Hadir;
+                    if(k==='S') el.innerText = counts.Sakit;
+                    if(k==='I') el.innerText = counts.Izin;
+                    if(k==='A') el.innerText = counts.Alpa;
+                    if(k==='L') el.innerText = counts.Libur;
                 }
-            }
+            });
         };
 
         window.saveJournalEntry = async (e, collectionName, targetUid) => {
@@ -1675,7 +1692,6 @@
                         }).join('');
                     }
 
-                    // Assign ke innerHTML
                     content.innerHTML = `
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 no-print">
                         <div>
@@ -1697,7 +1713,6 @@
                         </div>
                     </div>
 
-                    <!-- TABEL ABSENSI -->
                     <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                         <div class="overflow-x-auto custom-scrollbar max-h-[70vh]">
                             <table class="w-full border-collapse text-left">
@@ -1727,7 +1742,6 @@
                         </div>
                     </div>`;
                     
-                    // Trigger visual status sync pasca-render
                     setTimeout(() => { window.syncVisualAttendance(); }, 50);
                 }
 
@@ -1859,7 +1873,7 @@
                             <div class="${readOnly && !ed ? 'lg:col-span-3' : 'lg:col-span-2'} space-y-4 max-h-[75vh] overflow-y-auto custom-scrollbar pr-2 pb-12 relative z-0">
                                 ${data.length === 0 ? `<div class="bg-white p-12 rounded-2xl text-center text-slate-400 border border-slate-100 shadow-sm"><i class="fas fa-clipboard-list text-6xl mb-4 opacity-20"></i><p class="font-medium text-lg">Belum ada riwayat Progsus.</p></div>` : ''}
                                 ${data.map(p => {
-                                    let statusBadge = p.status === 'Disetujui' ? `<span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shadow-sm ml-2"><i class="fas fa-check-double mr-1"></i> ACC</span>` : `<span class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 shadow-sm ml-2"><i class="fas fa-clock mr-1"></i> Wait</span>`;
+                                    let statusBadge = p.status === 'Disetujui' ? `<span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shadow-sm ml-2"><i class="fas fa-check-double mr-1"></i> ACC</span>` : `<span class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-emerald-200 shadow-sm ml-2"><i class="fas fa-clock mr-1"></i> Wait</span>`;
                                     let accBtn = (isSuperAdmin && p.status !== 'Disetujui') ? `<div class="mt-3 pt-3 border-t border-slate-100 no-print"><button onclick="window.approveData('progsus', '${p.id}')" class="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-4 py-2 rounded-lg font-bold shadow-sm transition relative z-10"><i class="fas fa-check-circle mr-1"></i> ACC Data Ini</button></div>` : '';
                                     let sName = targetStudents.find(x => x.id === p.studentId)?.name || p.student || '-';
                                     
@@ -1884,7 +1898,7 @@
                         </div>
                     `;
                 }
-                
+
                 else if (window.state.currentView === 'penilaian') {
                     const subView = window.state.penilaianSubView || 'bulanan';
                     let contentHTML = '';
@@ -1930,8 +1944,8 @@
                                           ${(n.score || n.predicate || n.subject) ? `
                                           <div class="flex gap-2 mb-3 flex-wrap">
                                               ${n.subject ? `<span class="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200"><i class="fas fa-book-open mr-1"></i> ${n.subject}</span>` : ''}
-                                              ${n.score ? `<span class="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-200"><i class="fas fa-check-circle mr-1"></i> Nilai: ${n.score}</span>` : ''}
-                                              ${n.predicate ? `<span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-200"><i class="fas fa-star mr-1"></i> Predikat: ${n.predicate}</span>` : ''}
+                                              ${n.score ? `<span class="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200"><i class="fas fa-check-circle mr-1"></i> Nilai: ${n.score}</span>` : ''}
+                                              ${n.predicate ? `<span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200"><i class="fas fa-star mr-1"></i> Predikat: ${n.predicate}</span>` : ''}
                                           </div>` : ''}
                                           <p class="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed border-t border-slate-100 pt-2">${n.raw_text || n.catatan || n.catatan_teks || ''}</p>
                                           
@@ -2006,7 +2020,6 @@
 
                             ${!selectedStudent ? `<div class="bg-white p-12 text-center rounded-2xl shadow-sm border border-slate-200 text-slate-400 font-medium">Pilih siswa terlebih dahulu.</div>` : `
                             
-                            <!-- PRINT AREA (A4 Layout) -->
                             <div class="bg-white rounded-none md:rounded-2xl shadow-none md:shadow-lg border-0 md:border border-slate-300 p-8 md:p-12 max-w-4xl mx-auto print:w-full print:p-0 print:shadow-none print:border-0 relative z-0">
                                 <div class="text-center border-b-[3px] border-black pb-4 mb-6">
                                     <h1 class="text-xl font-black uppercase tracking-widest text-black">Laporan Hasil Belajar (Raport)</h1>
