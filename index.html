@@ -7,14 +7,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-        <!-- Konfigurasi PWA SIMS Ceria Mandiri -->
-    <link rel="manifest" href="/manifest.json">
-    <link rel="icon" type="image/png" href="/Logo_Ceria Mandiri_-01-1.png">
+    
+    <!-- Konfigurasi PWA SIMS Ceria Mandiri -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="Logo_Ceria_Mandiri_-01-1-removebg-preview.png">
     <meta name="theme-color" content="#4f46e5">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="SIMS Ceria">
-    <link rel="apple-touch-icon" href="/Logo_Ceria Mandiri_-01-1.png">
+    <link rel="apple-touch-icon" href="Logo_Ceria_Mandiri_-01-1-removebg-preview.png">
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
@@ -50,8 +52,8 @@
     <aside id="sidebar" class="w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 no-print z-30 shadow-[4px_0_24px_rgba(0,0,0,0.02)] relative">
         <div class="p-4">
             <div class="flex items-center gap-3 mb-6 px-2">
-                <div class="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black text-xl shadow-md">
-                    <i class="fas fa-school"></i>
+                <div class="w-14 h-14 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
+                    <img src="Logo_Ceria_Mandiri_-01-1-removebg-preview.png" alt="Logo SLB Ceria Mandiri" class="w-full h-full object-contain" onerror="this.onerror=null; this.src='https://placehold.co/100x100/4f46e5/ffffff?text=SLB'; this.className='w-full h-full object-cover rounded-xl';">
                 </div>
                 <div>
                     <h1 class="font-black text-slate-800 text-sm leading-tight">SIMS SLB</h1>
@@ -210,10 +212,10 @@
         <div class="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl relative overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
             <div class="text-center mb-8 mt-2">
-                <div class="w-16 h-16 bg-indigo-100 rounded-2xl mx-auto flex items-center justify-center mb-4 transform rotate-12 shadow-inner">
-                    <i class="fas fa-school text-3xl text-indigo-600 -rotate-12"></i>
+                <div class="w-28 h-28 mx-auto mb-4 flex items-center justify-center overflow-hidden">
+                    <img src="Logo_Ceria_Mandiri_-01-1-removebg-preview.png" alt="Logo SLB Ceria Mandiri" class="w-full h-full object-contain" onerror="this.onerror=null; this.src='https://placehold.co/100x100/4f46e5/ffffff?text=SLB'; this.className='w-full h-full object-cover rounded-2xl';">
                 </div>
-                <h1 class="text-2xl font-black text-slate-800">SIMS Ceria Mandiri</h1>
+                <h1 class="text-2xl font-black text-slate-800 mt-2">SIMS Ceria Mandiri</h1>
                 <p class="text-sm text-slate-500 font-medium mt-1">Sistem Administrasi Guru Digital</p>
             </div>
             <form onsubmit="window.handleLogin(event)" class="space-y-5">
@@ -559,7 +561,7 @@
 
                         let mappedData = allData || [];
                         
-                        // Mapping Khusus Absensi
+                        // Mapping Khusus Absensi (student_id dan teacher_id uuid)
                         if (t.memory === 'attendance') {
                             mappedData = mappedData.map(item => ({
                                 ...item,
@@ -567,7 +569,7 @@
                                 teacherId: item.teacherId || item.teacher_id
                             }));
                             
-                            // Filter Duplikat Lokal (Ambil data paling akhir/terbaru per siswa per hari)
+                            // Filter Duplikat Lokal (Ambil data paling akhir/terbaru)
                             const uniqueAtt = new Map();
                             mappedData.forEach(item => {
                                 const sId = item.studentId || item.student_id;
@@ -793,7 +795,7 @@
             let pending = window.getPendingAttendance();
             pending = pending.filter(p => !(p.studentId === studentId && p.date === date));
             localStorage.setItem('pending_attendance', JSON.stringify(pending));
-            if(pending.length === 0) window.state.hasUnsyncedData = false;
+            if (pending.length === 0) window.state.hasUnsyncedData = false;
             window.syncVisualAttendance();
         };
         
@@ -808,13 +810,13 @@
             if (el) {
                 if (window.isSavingAttendance) {
                     el.innerHTML = '<i class="fas fa-spinner fa-spin text-amber-500 mr-2"></i> Menyimpan...';
-                    el.classList.remove('border-amber-300', 'bg-amber-50'); el.classList.add('border-slate-200', 'bg-white');
+                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-slate-200 bg-white text-slate-600";
                 } else if (window.state.hasUnsyncedData) {
                     el.innerHTML = '<i class="fas fa-exclamation-triangle text-amber-500 mr-2"></i> Tersimpan Offline (Belum Sinkron)';
-                    el.classList.add('border-amber-300', 'bg-amber-50'); el.classList.remove('border-slate-200', 'bg-white');
+                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-amber-300 bg-amber-50 text-amber-700";
                 } else {
                     el.innerHTML = '<i class="fas fa-cloud text-emerald-500 mr-2"></i> Semua Aman di Cloud';
-                    el.classList.remove('border-amber-300', 'bg-amber-50'); el.classList.add('border-slate-200', 'bg-white');
+                    el.className = "px-3 py-2 rounded-xl text-xs font-bold border flex items-center transition-all border-slate-200 bg-white text-slate-600";
                 }
             }
         };
@@ -822,7 +824,9 @@
         window.updateAttendance = async (studentId, date, status) => {
             if (!window.state?.currentUser) return;
             try {
-                let existingIdx = window.localDb.attendance.findIndex(a => (a.studentId === studentId || a.student_id === studentId) && a.date === date);
+                let existingIdx = window.localDb.attendance.findIndex(a => 
+                    (a.studentId === studentId || a.student_id === studentId) && a.date === date
+                );
                 let existing = existingIdx > -1 ? window.localDb.attendance[existingIdx] : null;
                 let teacherId = window.state.selectedTeacherId || window.state.currentUser.id;
                 
@@ -838,7 +842,7 @@
                 let id = existing ? existing.id : window.generateId();
                 let dataObj = { id, teacherId, teacher_id: teacherId, studentId, student_id: studentId, date, status };
                 
-                if(existingIdx > -1) window.localDb.attendance[existingIdx] = dataObj;
+                if (existingIdx > -1) window.localDb.attendance[existingIdx] = dataObj;
                 else window.localDb.attendance.push(dataObj);
                 
                 window.isSavingAttendance = true;
@@ -882,9 +886,10 @@
 
                 localStorage.removeItem('pending_attendance');
                 window.state.hasUnsyncedData = false;
-                if(!isBackground) window.showToast('Seluruh data absensi berhasil tersimpan ke Cloud!', 'success');
-            } catch(e) {
-                if(!isBackground) window.showToast('Gagal terhubung ke Cloud. Tersimpan offline.', 'error');
+                
+                if (!isBackground) window.showToast('Seluruh data absensi berhasil tersimpan ke Cloud!', 'success');
+            } catch (e) {
+                if (!isBackground) window.showToast('Gagal terhubung ke Cloud. Tersimpan offline.', 'error');
             } finally {
                 window.isSavingAttendance = false; 
                 window.syncVisualAttendance();
@@ -892,19 +897,23 @@
         };
 
         window.recalcAttendanceTotals = (studentId) => {
-            const selMonth = window.state.attMonth || window.getToday().substring(0,7);
-            const attList = window.localDb.attendance.filter(a => (a?.studentId === studentId || a?.student_id === studentId) && (a?.date||'').startsWith(selMonth));
+            const selMonth = window.state.attMonth || window.getToday().substring(0, 7);
+            const attList = window.localDb.attendance.filter(a => 
+                (a?.studentId === studentId || a?.student_id === studentId) && 
+                (a?.date || '').startsWith(selMonth)
+            );
+            
             let counts = { Hadir: 0, Sakit: 0, Izin: 0, Alpa: 0, Libur: 0 };
             attList.forEach(a => { if (counts[a.status] !== undefined) counts[a.status]++; });
             
-            ['H','S','I','A','L'].forEach(k => {
+            ['H', 'S', 'I', 'A', 'L'].forEach(k => {
                 const el = document.getElementById(`tot-${k}-${studentId}`);
-                if(el) {
-                    if(k==='H') el.innerText = counts.Hadir;
-                    if(k==='S') el.innerText = counts.Sakit;
-                    if(k==='I') el.innerText = counts.Izin;
-                    if(k==='A') el.innerText = counts.Alpa;
-                    if(k==='L') el.innerText = counts.Libur;
+                if (el) {
+                    if (k === 'H') el.innerText = counts.Hadir;
+                    if (k === 'S') el.innerText = counts.Sakit;
+                    if (k === 'I') el.innerText = counts.Izin;
+                    if (k === 'A') el.innerText = counts.Alpa;
+                    if (k === 'L') el.innerText = counts.Libur;
                 }
             });
         };
@@ -1611,14 +1620,13 @@
                         `;
                     }
                 }
-                
+
                 else if (window.state.currentView === 'attendance') {
                     const selMonth = window.state.attMonth || today.substring(0, 7);
                     const [yearStr, monthStr] = selMonth.split('-');
                     const daysInMonth = new Date(yearStr, monthStr, 0).getDate();
                     const daysArray = Array.from({length: daysInMonth}, (_, i) => i + 1);
 
-                    // Membangun Header Hari & Tanggal (Lebih rapi untuk menghindari error string)
                     let headerDaysHTML = '';
                     daysArray.forEach(d => {
                         const dateObj = new Date(yearStr, monthStr - 1, d);
@@ -1627,7 +1635,6 @@
                         headerDaysHTML += `<th class="p-1 border text-center text-[10px] min-w-[28px] ${isSunday ? 'bg-rose-100 text-rose-700 font-bold' : 'bg-slate-100 text-slate-700'}">${d}</th>`;
                     });
 
-                    // Membangun Tabel Siswa
                     let studentRowsHTML = '';
                     if (targetStudents.length === 0) {
                         studentRowsHTML = `<tr><td colspan="40" class="p-8 text-center text-xs font-bold text-slate-400">Belum ada siswa di kelas ini.</td></tr>`;
@@ -1644,7 +1651,6 @@
                             let totals = { Hadir: 0, Sakit: 0, Izin: 0, Alpa: 0, Libur: 0 };
                             Object.values(attMap).forEach(st => { if(totals[st] !== undefined) totals[st]++; });
 
-                            // Membangun kolom hari secara aman (escape variables)
                             let daysCells = '';
                             daysArray.forEach(d => {
                                 const dStr = String(d).padStart(2, '0');
