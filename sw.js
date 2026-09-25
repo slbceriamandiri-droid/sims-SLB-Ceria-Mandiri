@@ -33,10 +33,24 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
+  // PENTING: Jangan pernah melakukan cache pada request API Supabase atau request POST/PUT/DELETE
+  if (event.request.method !== 'GET' || event.request.url.includes('supabase.co')) {
+    return; // Biarkan request berjalan normal ke server tanpa campur tangan Service Worker
+  }
+
   event.respondWith(
     caches.match(event.request)
       .then(response => {
-        return response || fetch(event.request);
+        // Cache hit - kembalikan response dari cache lokal
+        if (response) {
+          return response;
+        }
+        
+        // Jika tidak ada di cache, ambil dari jaringan
+        return fetch(event.request).catch(err => {
+            console.warn('PWA Fetch Error:', err);
+            // Anda bisa mengembalikan halaman offline khusus di sini jika offline
+        });
       })
   );
 });
